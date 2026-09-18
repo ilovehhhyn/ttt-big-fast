@@ -57,6 +57,10 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
                             chunk_size=args.chunk, fast_blocks=args.fast_blocks,
                             lora=lora if lora.rank > 0 else None,
                             dtype=torch.float32, cache_dir=args.hf_cache)
+    # Master weights stay fp32; the forward runs under bf16 autocast (see
+    # TTTInnerLoop._autocast). remat_blocks trades compute for the math-SDPA score
+    # matrices, which dominate activation memory in the second-order path.
+    model.remat_blocks = args.remat_blocks
     model = model.to(device)
 
     inner = InnerConfig(optimizer=arm["inner"] if args.inner is None else args.inner,
@@ -67,7 +71,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     outer = OuterConfig(lr=args.outer_lr, total_steps=args.steps)
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
-                        slow_spec=arm["slow"] or ("__none__",), dtype="bf16")
+                        slow_spec=arm["slow"] or ("__none__",), dtype=args.dtype)
     cfg = Config(model=model.cfg, inner=inner, outer=outer, train=train)
     split = split_parameters(model, model.cfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
@@ -87,6 +91,9 @@ def main() -> None:
     p.add_argument("--window", type=int, default=8192)
     p.add_argument("--fast-blocks", type=int, default=4)
     p.add_argument("--remat-group", type=int, default=0)
+    p.add_argument("--remat-blocks", action="store_true",
+                   help="recompute each suffix block during backward (big memory win)")
+    p.add_argument("--dtype", default="bf16", choices=["bf16", "fp32"])
     p.add_argument("--tokens-per-step", type=int, default=524288)
     p.add_argument("--steps", type=int, default=250)
     p.add_argument("--inner", default=None, choices=[None, "none", "normalized_sgd", "adamw", "muon"])

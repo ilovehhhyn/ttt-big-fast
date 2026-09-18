@@ -46,6 +46,8 @@ from torch.utils.checkpoint import checkpoint
 from ttt.config import Config
 from ttt.optim.inner import InnerOptimizer
 
+_AUTOCAST_DTYPE = {"bf16": torch.bfloat16, "fp32": torch.float32}
+
 
 def flatten_state(state: dict) -> tuple[tuple[Tensor, ...], dict]:
     """Split an optimizer state dict into (tensor leaves, static template).
@@ -130,6 +132,20 @@ class TTTInnerLoop:
     serialise sequences and accumulate outer gradients instead.
     """
 
+    def _autocast(self, device_type: str):
+        """Mixed precision, matching e2e's compute_dtype=bf16 / param_dtype=fp32.
+
+        Only the FORWARD is autocast. `torch.autograd.grad(..., create_graph=True)` is
+        called outside it, which is the pattern the PyTorch docs prescribe for
+        gradient-penalty-style double backward. Master weights stay fp32, so the
+        inner update keeps full precision: a unit-norm step spread over 2e8 elements
+        moves each by ~1e-4, which is at the bf16 resolution of a 0.02-scale weight
+        and would be quantised away if the fast weights themselves were bf16.
+        Non-reentrant checkpointing restores autocast state on recompute.
+        """
+        dt = _AUTOCAST_DTYPE[self.cfg.train.dtype]
+        return torch.autocast(device_type=device_type, dtype=dt, enabled=(dt is not torch.float32))
+
     def __init__(self, model, cfg: Config, inner_opt: InnerOptimizer) -> None:
         self.model = model
         self.cfg = cfg
@@ -170,9 +186,10 @@ class TTTInnerLoop:
         """One TTT step. Returns (W_i, opt_state, caches, loss_before_update, token_nll)."""
         fast = self._decay_toward_init(fast, fast0)
 
-        logits, caches = self.model.suffix_forward(
-            prefix_chunk, fast=fast, caches=caches, chunk_index=chunk_index
-        )
+        with self._autocast(prefix_chunk.device.type):
+            logits, caches = self.model.suffix_forward(
+                prefix_chunk, fast=fast, caches=caches, chunk_index=chunk_index
+            )
         loss, token_nll = masked_cross_entropy(logits, targets, loss_mask)
 
         if self.inner_opt.is_noop:
@@ -194,9 +211,10 @@ class TTTInnerLoop:
     def _first_grad(self, prefix_out, targets, loss_mask, fast, caches) -> dict[str, Tensor]:
         """g_1 = d l_1 / d W_0, used only to seed AdamW's moments."""
         keys = self._fast_keys(fast)
-        logits, _ = self.model.suffix_forward(
-            prefix_out[:, : self.chunk_size], fast=fast, caches=caches, chunk_index=0
-        )
+        with self._autocast(prefix_out.device.type):
+            logits, _ = self.model.suffix_forward(
+                prefix_out[:, : self.chunk_size], fast=fast, caches=caches, chunk_index=0
+            )
         loss, _ = masked_cross_entropy(logits, targets[:, : self.chunk_size], loss_mask[:, : self.chunk_size])
         grads = torch.autograd.grad(loss, [fast[k] for k in keys], create_graph=True)
         return dict(zip(keys, grads, strict=True))
@@ -220,7 +238,8 @@ class TTTInnerLoop:
 
         # Prefix: frozen-block forward over the whole sequence, computed once.
         # Gradient to slow prefix params is first order only (see module docstring).
-        prefix_out = self.model.prefix_forward(input_ids)  # [1, T, d]
+        with self._autocast(input_ids.device.type):
+            prefix_out = self.model.prefix_forward(input_ids)  # [1, T, d]
 
         fast = dict(fast0)
         caches = self.model.init_caches(batch=1, device=input_ids.device, dtype=prefix_out.dtype)

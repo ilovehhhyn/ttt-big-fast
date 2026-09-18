@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint
 from torch import Tensor
 
 from ttt.config import ModelConfig
@@ -31,10 +32,16 @@ from ttt.model.rope import build_rope_cache
 
 
 class TTTTransformer(nn.Module):
-    def __init__(self, cfg: ModelConfig, *, max_seq_len: int) -> None:
+    def __init__(self, cfg: ModelConfig, *, max_seq_len: int, remat_blocks: bool = False) -> None:
         super().__init__()
         self.cfg = cfg
         self.max_seq_len = max_seq_len
+        # Recompute each suffix block's internals during backward instead of storing
+        # them (e2e's remat_block / remat_attention). The math SDPA backend that the
+        # second-order path requires materialises a [heads, chunk, window+chunk] score
+        # matrix per block -- 0.56 GiB in bf16 at chunk 1024 / window 8192 -- so this
+        # is the dominant activation cost and the first thing to trade for compute.
+        self.remat_blocks = remat_blocks
 
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size)
         # Blocks below first_fast_layer never see a fast weight -> fused attention.
@@ -175,7 +182,15 @@ class TTTTransformer(nn.Module):
             prefix = f"blocks.{layer}."
             overrides = {k[len(prefix) :]: v for k, v in fast.items() if k.startswith(prefix)}
             assert overrides, f"no fast weights supplied for suffix block {layer}"
-            h, cache = torch.func.functional_call(block, overrides, (h, cos, sin, caches[j]))
+            if self.remat_blocks:
+                h, cache = torch.utils.checkpoint.checkpoint(
+                    lambda hh, blk=block, ov=overrides, cc=caches[j]: torch.func.functional_call(
+                        blk, ov, (hh, cos, sin, cc)
+                    ),
+                    h, use_reentrant=False,
+                )
+            else:
+                h, cache = torch.func.functional_call(block, overrides, (h, cos, sin, caches[j]))
             new_caches.append(cache)
         return self._project_logits(h), new_caches
 
