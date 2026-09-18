@@ -70,6 +70,15 @@ class InnerOptimizer(ABC):
     def __init__(self, cfg: InnerConfig) -> None:
         self.cfg = cfg
 
+    @property
+    def needs_first_grad(self) -> bool:
+        """True if init_state requires the first chunk's gradient (AdamW warm start).
+
+        The inner-loop runner defers init_state until after the first backward when
+        this is True, so the moments can be seeded with m_0 = g_1, v_0 = g_1^2.
+        """
+        return False
+
     @abstractmethod
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         ...
@@ -187,6 +196,10 @@ class DifferentiableAdamW(InnerOptimizer):
     the RMS = lr convention. We therefore carry a `bias_correct` flag in the state and
     skip the correction on the warm path. `m`, `v` and `t` are exactly as specified.
     """
+
+    @property
+    def needs_first_grad(self) -> bool:
+        return self.cfg.warm_start
 
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         if self.cfg.warm_start:

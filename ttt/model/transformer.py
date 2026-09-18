@@ -92,12 +92,21 @@ class TTTTransformer(nn.Module):
             out.extend((c.k, c.v))
         return tuple(out)
 
-    def unflatten_caches(self, flat: tuple[Tensor, ...]) -> list[KVCache]:
+    def unflatten_caches(self, flat: tuple[Tensor, ...], chunk_index: int) -> list[KVCache]:
+        """Rebuild caches at the START of chunk `chunk_index`.
+
+        length = min(window_size, chunk_index * chunk_size): the number of valid
+        cached positions is a deterministic function of how many chunks have been
+        consumed, so it is recomputed here rather than carried as an int tensor
+        across the checkpoint boundary.
+        """
         assert len(flat) == 2 * self.cfg.fast_blocks, (
             f"expected {2 * self.cfg.fast_blocks} cache tensors, got {len(flat)}"
         )
+        seen = chunk_index * self.cfg.chunk_size
+        length = torch.tensor(min(self.cfg.window_size, seen), dtype=torch.int64, device=flat[0].device)
         return [
-            KVCache(k=flat[2 * i], v=flat[2 * i + 1], length=None)
+            KVCache(k=flat[2 * i], v=flat[2 * i + 1], length=length)
             for i in range(self.cfg.fast_blocks)
         ]
 
@@ -136,9 +145,7 @@ class TTTTransformer(nn.Module):
             prefix = f"blocks.{layer}."
             overrides = {k[len(prefix) :]: v for k, v in fast.items() if k.startswith(prefix)}
             assert overrides, f"no fast weights supplied for suffix block {layer}"
-            h, cache = torch.func.functional_call(
-                block, overrides, (h, cos, sin, caches[j]), {"chunk_index": chunk_index}
-            )
+            h, cache = torch.func.functional_call(block, overrides, (h, cos, sin, caches[j]))
             new_caches.append(cache)
         return self._project_logits(h), new_caches
 

@@ -47,6 +47,47 @@ from ttt.config import Config
 from ttt.optim.inner import InnerOptimizer
 
 
+def flatten_state(state: dict) -> tuple[tuple[Tensor, ...], dict]:
+    """Split an optimizer state dict into (tensor leaves, static template).
+
+    The checkpointed region must be a PURE function of its tensor inputs: anything
+    threaded through a closure would take a different branch on recompute and
+    desynchronise the saved-tensor count. Tensor leaves therefore travel in the
+    carry; non-tensor leaves (step counts, flags) are deterministic given the
+    region's inputs and travel in the static template.
+    """
+    tensors: list[Tensor] = []
+    def walk(node):
+        if isinstance(node, dict):
+            return {k: walk(node[k]) for k in sorted(node)}
+        if isinstance(node, Tensor):
+            tensors.append(node)
+            return _TENSOR_SLOT
+        return node
+
+    # walk() must run BEFORE tuple(tensors) is built: Python evaluates the elements
+    # of a return tuple left to right, so inlining walk() into the return statement
+    # would snapshot an empty list.
+    template = walk(state)
+    return tuple(tensors), template
+
+
+def unflatten_state(tensors: tuple[Tensor, ...], template: dict) -> dict:
+    it = iter(tensors)
+    def walk(node):
+        if isinstance(node, dict):
+            return {k: walk(v) for k, v in node.items()}
+        if node is _TENSOR_SLOT:
+            return next(it)
+        return node
+    out = walk(template)
+    assert next(it, None) is None, "more tensors supplied than slots in the state template"
+    return out
+
+
+_TENSOR_SLOT = object()
+
+
 @dataclass
 class SequenceOutput:
     """Result of running TTT over one sequence."""
@@ -127,14 +168,20 @@ class TTTInnerLoop:
         )
         grad_dict = dict(zip(keys, grads, strict=True))
 
-        if not opt_state and self.inner_opt.needs_first_grad:
-            # AdamW warm start: m_0 = g_1, v_0 = g_1^2 removes the step-1 singularity.
-            opt_state = self.inner_opt.init_state(fast, first_grad=grad_dict)
-
         fast, opt_state = self.inner_opt.step(
             fast, grad_dict, opt_state, lr_scale=lr_scale, lr_mult=lr_mult
         )
         return fast, opt_state, caches, loss, token_nll
+
+    def _first_grad(self, prefix_out, targets, loss_mask, fast, caches) -> dict[str, Tensor]:
+        """g_1 = d l_1 / d W_0, used only to seed AdamW's moments."""
+        keys = self._fast_keys(fast)
+        logits, _ = self.model.suffix_forward(
+            prefix_out[:, : self.chunk_size], fast=fast, caches=caches, chunk_index=0
+        )
+        loss, _ = masked_cross_entropy(logits, targets[:, : self.chunk_size], loss_mask[:, : self.chunk_size])
+        grads = torch.autograd.grad(loss, [fast[k] for k in keys], create_graph=True)
+        return dict(zip(keys, grads, strict=True))
 
     # -------------------------------------------------------------- sequence
 
@@ -158,23 +205,33 @@ class TTTInnerLoop:
         prefix_out = self.model.prefix_forward(input_ids)  # [1, T, d]
 
         fast = dict(fast0)
-        opt_state: dict = {} if self.inner_opt.needs_first_grad else self.inner_opt.init_state(fast)
         caches = self.model.init_caches(batch=1, device=input_ids.device, dtype=prefix_out.dtype)
-
         keys = self._fast_keys(fast)
-        n_cache = len(caches)
+        n_cache_t = 2 * self.cfg.model.fast_blocks
+
+        # Seed the inner-optimizer state BEFORE the checkpointed loop so the region is
+        # a pure function of its inputs. AdamW's warm start needs g_1, which costs one
+        # extra forward+grad on chunk 0 (~1/N of the sequence); every other optimizer
+        # is stateless or state-independent of the data.
+        if self.inner_opt.needs_first_grad:
+            opt_state = self.inner_opt.init_state(fast, first_grad=self._first_grad(prefix_out, targets, loss_mask, fast, caches))
+        else:
+            opt_state = self.inner_opt.init_state(fast)
+        state_tensors, state_template = flatten_state(opt_state)
+        n_state_t = len(state_tensors)
+
         chunk_losses: list[Tensor] = []
         token_nlls: list[Tensor] = []
 
         def run_group(start: int, *flat: Tensor):
-            """Checkpointed region covering `self.group` consecutive chunks.
+            """Checkpointed region over `self.group` consecutive chunks.
 
-            Flat layout: [fast..., cache_k/v interleaved...]. Losses are returned as
-            tensors so they stay in the graph across the checkpoint boundary.
+            Flat layout: [fast..., opt_state..., cache_k/v...]. Everything the region
+            reads is either an argument or a compile-time constant.
             """
             f = dict(zip(keys, flat[: len(keys)], strict=True))
-            c = self.model.unflatten_caches(flat[len(keys) :])
-            st = opt_state_ref[0]
+            st = unflatten_state(flat[len(keys) : len(keys) + n_state_t], state_template)
+            c = self.model.unflatten_caches(flat[len(keys) + n_state_t :], start)
             losses, nlls = [], []
             for j in range(self.group):
                 idx = start + j
@@ -186,15 +243,14 @@ class TTTInnerLoop:
                 )
                 losses.append(loss_i)
                 nlls.append(nll_i)
-            opt_state_ref[0] = st
-            return (*[f[k] for k in keys], *self.model.flatten_caches(c), torch.stack(losses), torch.cat(nlls, dim=-1))
+            st_t, _ = flatten_state(st)
+            return (*[f[k] for k in keys], *st_t, *self.model.flatten_caches(c),
+                    torch.stack(losses), torch.cat(nlls, dim=-1))
 
-        opt_state_ref = [opt_state]
-        flat = (*[fast[k] for k in keys], *self.model.flatten_caches(caches))
-
+        flat = (*[fast[k] for k in keys], *state_tensors, *self.model.flatten_caches(caches))
         for start in range(0, self.num_chunks, self.group):
             out = checkpoint(run_group, start, *flat, use_reentrant=False)
-            flat = out[: len(keys) + n_cache * 2]
+            flat = out[: len(keys) + n_state_t + n_cache_t]
             chunk_losses.append(out[-2])
             token_nlls.append(out[-1])
 
