@@ -25,7 +25,8 @@ include = ["ttt*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not hf'"
+markers = ["hf: needs the Hugging Face checkpoint download"]
 
 [tool.ruff]
 line-length = 120
