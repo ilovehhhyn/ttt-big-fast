@@ -89,5 +89,17 @@ class Trainer:
 
         gnorm = torch.nn.utils.clip_grad_norm_(self.slow_params, self.cfg.outer.grad_clip)
         self.optimizer.step()
+
+        extra: dict = {}
+        if self.cfg.inner.learned_lr:
+            # exp(inner_lr_log) multiplies the inner step per fast tensor. It starts at
+            # exactly 1.0. Whether the outer loop drives it toward 0 (learning to switch
+            # TTT off) or keeps it near 1 (learning to use TTT) is the single most
+            # diagnostic quantity in this experiment, so it is logged every step.
+            with torch.no_grad():
+                mult = torch.stack([m.detach().reshape(()) for m in self.model.inner_lr_multipliers().values()])
+            extra = {"inner_lr_mult_mean": float(mult.mean()),
+                     "inner_lr_mult_min": float(mult.min()),
+                     "inner_lr_mult_max": float(mult.max())}
         return StepMetrics(step=step, loss=total / self.seqs_per_step, grad_norm=float(gnorm),
-                           lr=lr, inner_lr_scale=scale, seconds=time.perf_counter() - t0)
+                           lr=lr, inner_lr_scale=scale, seconds=time.perf_counter() - t0, extra=extra)
