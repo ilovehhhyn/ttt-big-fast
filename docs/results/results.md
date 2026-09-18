@@ -109,3 +109,50 @@ allocate one more 1.12 GiB fp32 score matrix.
 Consequence for the fast-weight-fraction ablation: 1/2 and all-blocks do NOT fit on an
 80 GiB card and would need either H200s (drained on this cluster), model parallelism
 across GPUs, or truncated backprop through time.
+
+## Arm B - TTT-naive (inner loop on, nothing meta-learned), 8K, 32 sequences
+
+Fast weights = MLPs of the last 4 blocks (201,326,592 params). `normalized_sgd`, where
+`lr_rms` IS the per-element RMS of each chunk update. The reference point is TTT-E2E's own
+rule, whose per-element step for this fast set is `1/sqrt(201326592) = 7.05e-5`.
+
+| inner lr_rms | multiple of the e2e-equivalent step | held-out loss |
+|---|---|---|
+| 0 (no TTT) | - | **2.4939** |
+| 2e-5 | 0.28x | 2.6632 |
+| 7e-5 | 1.0x | 5.3181 |
+| 2e-4 | 2.8x | 12.8929 |
+
+**Test-time training without meta-learning monotonically damages a strongly pretrained
+model.** Even at exactly the paper's effective step size, loss more than doubles. This is
+consistent in direction with TTT-E2E's own finding that TTT-naive gains little and that
+meta-learning is what makes test-time updates useful (their Fig. 2), but the effect here is
+far more severe than in their setting. The likely reason is the base model: they meta-train
+from scratch, whereas we start from Llama-3.2-1B, which has been trained far longer and
+therefore sits in a sharper minimum where an untrained gradient step is destructive.
+
+This raises the bar for arm C: the outer loop must not merely improve on TTT-naive, it must
+overcome an actively harmful inner loop. The learned per-tensor inner learning rate is the
+mechanism that can do it, since it can shrink the step where the step hurts.
+
+## Arm E - reference TTT-E2E 760M (third-party reproduction), 8K, 32 sequences
+
+Checkpoint: `Luxel/ttt-e2e-760m-results`, stage `S2_ADAPT/adapt-760m-e2e-8K-from-fa`,
+converted from orbax to PyTorch (344 tensors, 883.7M params). NOT the authors' own release.
+Inner rule is e2e's exact `clip_by_global_norm(1.0)` + `sgd(1.0)`.
+
+| configuration | loss |
+|---|---|
+| halves RoPE (wrong), no TTT | 5.5771 |
+| halves RoPE (wrong), with TTT | 5.0808 |
+| **interleaved RoPE (correct), with TTT** | **3.0668** |
+
+The 2.0-nat jump came from a single convention: TTT-E2E's `apply_rotary_emb` reshapes the
+head dimension to `(..., d/2, 2)` and multiplies as a complex number, pairing channels
+(0,1), (2,3), ..., whereas HuggingFace Llama splits the head dimension into halves. A model
+trained under one convention is mis-rotated under the other. Arms A-D keep the halves
+convention and their HF logits parity is unaffected (correlation 1.000000).
+
+Arm E is a 760M model and arm A is a 1.24B model, so the gap between 3.07 and 2.49 is
+mostly capacity and pretraining budget, not method. Arm E is a reference point for what the
+published recipe produces, not a parameter-matched comparison.
