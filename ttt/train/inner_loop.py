@@ -238,8 +238,18 @@ class TTTInnerLoop:
 
         # Prefix: frozen-block forward over the whole sequence, computed once.
         # Gradient to slow prefix params is first order only (see module docstring).
-        with self._autocast(input_ids.device.type):
-            prefix_out = self.model.prefix_forward(input_ids)  # [1, T, d]
+        # Checkpoint the prefix (e2e does the same:
+        # `eqx.filter_checkpoint(self.language_model.prefix_call)`). Its output feeds
+        # every chunk, so without this the full 12-block forward over all T tokens stays
+        # resident until the outer backward. Slow params live in the prefix (LoRA on its
+        # attention, its norms), so the graph cannot simply be detached. The prefix has
+        # no fast-weight dependency, so it needs only a FIRST-order backward and one
+        # recomputation.
+        def _prefix(ids):
+            with self._autocast(ids.device.type):
+                return self.model.prefix_forward(ids)
+
+        prefix_out = checkpoint(_prefix, input_ids, use_reentrant=False)  # [1, T, d]
 
         fast = dict(fast0)
         caches = self.model.init_caches(batch=1, device=input_ids.device, dtype=prefix_out.dtype)

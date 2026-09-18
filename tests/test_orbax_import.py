@@ -143,9 +143,8 @@ def test_transpose_is_actually_applied():
     got = out["blocks.1.mlp.w1.weight"]
     assert got.shape == (cfg.intermediate_size, cfg.hidden_size), "torch.nn.Linear is [out, in]"
     np.testing.assert_allclose(got.numpy(), src[1].T)
-    # The untransposed slice would be a different (non-square) shape, so a silent
-    # reshape would be caught above; check the values too in case in == out elsewhere.
-    assert not np.allclose(got.numpy().T, src[1].T), "values must not equal the untransposed source"
+    # A reshape instead of a transpose would keep the shape but scramble the values.
+    assert not np.allclose(got.numpy(), src[1].reshape(got.shape)), "transpose, not reshape"
 
     # wo is square (hidden -> hidden): shape alone cannot detect a missing transpose.
     src_wo = tree[BLOCKS + "seq_modeling_block.wo.weight"]
@@ -230,6 +229,66 @@ def test_prime_slice_order_follows_the_suffix():
     for j in range(cfg.fast_blocks):
         i = cfg.first_fast_layer + j
         np.testing.assert_allclose(out[f"blocks.{i}.mlp_prime.w2.weight"].numpy(), src[j].T)
+
+
+# ----------------------------------------------------------------------------- readers
+
+
+def _write_e2e_like_checkpoint(cfg: ModelConfig, root) -> object:
+    """A real orbax checkpoint with the e2e key structure, INCLUDING the None leaves.
+
+    The real tree carries None for every RMSNorm bias, for `lm_head` (tied embeddings),
+    for the per-block `ffn_prime_*` slots (the prime modules live in prime_storage) and
+    for the `step_index` / `kv_cache_index` counters. The reader must drop them."""
+    import orbax.checkpoint as ocp
+
+    nested: dict = {}
+    for key, value in synthetic_tree(cfg).items():
+        node, parts = nested, key.split(".")
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = value
+    nested["step_index"] = {"init": None}
+    nested["language_model"]["lm_head"] = None
+    nested["language_model"]["model"]["ln_f"]["bias"] = None
+    blocks = nested["language_model"]["model"]["h"]["blocks"]
+    blocks["feed_forward_prime"] = None
+    blocks["ffn_prime_norm"] = None
+    blocks["ffn_prime_post_norm"] = None
+    blocks["seq_modeling_block"]["kv_cache_index"] = {"init": None}
+
+    path = root / "model_weights"
+    ocp.PyTreeCheckpointer().save(path, nested)
+    return path
+
+
+def test_read_orbax_tree_flattens_and_drops_none_leaves(tmp_path):
+    pytest.importorskip("orbax.checkpoint")
+    from ttt.utils.orbax_import import read_orbax_tree
+
+    cfg = e2e_760m_config(**SMALL)
+    expected = synthetic_tree(cfg)
+    got = read_orbax_tree(_write_e2e_like_checkpoint(cfg, tmp_path))
+
+    assert set(got) == set(expected), f"symmetric difference: {sorted(set(got) ^ set(expected))}"
+    for k, v in expected.items():
+        np.testing.assert_array_equal(got[k], v)
+    # The flattened tree must feed straight into the mapper.
+    assert set(map_e2e_to_ours(got, cfg)) == set(map_e2e_to_ours(expected, cfg))
+
+
+def test_tensorstore_fallback_reads_the_same_arrays(tmp_path):
+    """The no-orbax path must agree with the orbax path array for array."""
+    pytest.importorskip("orbax.checkpoint")
+    pytest.importorskip("tensorstore")
+    from ttt.utils.orbax_import import _read_ocdbt_with_tensorstore
+
+    cfg = e2e_760m_config(**SMALL)
+    expected = synthetic_tree(cfg)
+    got = _read_ocdbt_with_tensorstore(_write_e2e_like_checkpoint(cfg, tmp_path))
+    assert set(got) == set(expected)
+    for k, v in expected.items():
+        np.testing.assert_array_equal(got[k], v)
 
 
 # ------------------------------------------------------------------ real checkpoint (hf)
