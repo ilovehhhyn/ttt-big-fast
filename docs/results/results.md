@@ -87,3 +87,25 @@ not with the fast-weight count.
 One observation worth noting for the record: `torch.autocast` leaves the residual stream
 in fp32 (the embedding output is fp32 and each residual add keeps that dtype), so the
 prefix output is fp32 even under bf16 autocast. Only the matmuls run in bf16.
+
+### What makes fast_blocks=4 fit at 8K
+
+Re-measured at 8192 context, `remat_group=1`, `--remat-blocks`, bf16 autocast, prefix
+checkpointed, `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`:
+
+| fast_blocks | fraction of 16 | forward peak | backward peak | fits in 79.3 GiB? |
+|---|---|---|---|---|
+| 1 | 1/16 | 33.95 GiB | 53.49 GiB | yes |
+| 2 | 1/8 | 36.48 GiB | 71.02 GiB | yes |
+| 4 | **1/4 (plan default)** | 38.01 GiB | **77.30 GiB** | yes, with ~2 GiB spare |
+
+Backward grows about 12 GiB per additional fast block while forward grows under 2 GiB,
+confirming that the attention double-backward, not fast-weight storage, sets the limit.
+The four settings that together brought 4 blocks under the limit were: bf16 autocast,
+checkpointing the prefix, `remat_group=1` (not the `sqrt(N)=2` default), and per-block
+recompute. Without them the same configuration OOMed at 77.6 GiB while trying to
+allocate one more 1.12 GiB fp32 score matrix.
+
+Consequence for the fast-weight-fraction ablation: 1/2 and all-blocks do NOT fit on an
+80 GiB card and would need either H200s (drained on this cluster), model parallelism
+across GPUs, or truncated backprop through time.
