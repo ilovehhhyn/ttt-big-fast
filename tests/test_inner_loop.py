@@ -55,10 +55,24 @@ def meta_grad(cfg, model, split, *, remat_group):
     return out, [torch.zeros(1, dtype=torch.float64) if g is None else g for g in grads]
 
 
-def test_resolve_remat_group_sqrt_default():
+def test_resolve_remat_group_picks_nearest_divisor():
+    # Perfect squares: exactly sqrt(N).
     assert resolve_remat_group(16, 0) == 4
     assert resolve_remat_group(4, 0) == 2
+    # N=8: sqrt is 2.83 but 3 does not divide 8, so the nearest divisor is 2.
+    assert resolve_remat_group(8, 0) == 2
+    # N=32: sqrt is 5.66; divisors are 4 and 8, and 4 is nearer.
+    assert resolve_remat_group(32, 0) == 4
+    # N=128 (128K context): sqrt is 11.3; nearest divisor is 8.
+    assert resolve_remat_group(128, 0) == 8
+    assert resolve_remat_group(7, 0) == 1  # prime N has only 1 and N
     assert resolve_remat_group(8, 8) == 8
+
+
+def test_resolve_remat_group_rejects_non_divisor():
+    import pytest as _pytest
+    with _pytest.raises(AssertionError, match="must divide"):
+        resolve_remat_group(8, 3)
 
 
 def test_zero_inner_lr_matches_plain_gradient():

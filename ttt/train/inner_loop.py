@@ -99,11 +99,24 @@ class SequenceOutput:
 
 
 def resolve_remat_group(num_chunks: int, remat_group: int) -> int:
-    """Group size g for checkpointing through time. 0 -> round(sqrt(N)), clamped to [1, N]."""
-    g = round(sqrt(num_chunks)) if remat_group == 0 else remat_group
-    g = max(1, min(g, num_chunks))
-    assert num_chunks % g == 0 or g == num_chunks, (
-        f"remat_group {g} must divide num_chunks {num_chunks} (or equal it); "
+    """Group size g for checkpointing through time.
+
+    Peak fast-weight storage is (N/g + g) copies, minimised at g = sqrt(N). But g must
+    DIVIDE N: a ragged final group would silently change the recompute pattern, and
+    (worse) make the saved-tensor count differ between forward and recompute. So with
+    remat_group=0 we take the divisor of N nearest sqrt(N), breaking ties toward the
+    SMALLER divisor -- under double backward a group is re-executed 2-3.5x and the
+    per-chunk recompute cost grows with g, so the smaller side is the cheaper error.
+    """
+    assert num_chunks >= 1
+    if remat_group == 0:
+        target = sqrt(num_chunks)
+        divisors = [d for d in range(1, num_chunks + 1) if num_chunks % d == 0]
+        g = min(divisors, key=lambda d: (abs(d - target), d))
+    else:
+        g = max(1, min(remat_group, num_chunks))
+    assert num_chunks % g == 0, (
+        f"remat_group {g} must divide num_chunks {num_chunks}; "
         f"ragged final groups would change the recompute pattern silently"
     )
     return g
