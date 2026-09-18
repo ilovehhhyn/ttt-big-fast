@@ -32,10 +32,11 @@ Fast-weight fraction sweep (arms B, C, D): last 1/4 (4 blocks, 201M params) → 
 | Item | Value |
 |---|---|
 | Base model | `meta-llama/Llama-3.2-1B`: 16 layers, hidden 2048, intermediate 8192, 32 heads, 8 KV heads (GQA), head_dim 64, vocab 128256, RoPE θ=500000 with Llama-3 scaling (factor 32, low_freq_factor 1, high_freq_factor 4, original_max_position 8192), RMSNorm eps 1e-5, tied embeddings, **no** QK-norm, **no** post-norm, SwiGLU MLP. Gated repo; licence permits research. |
-| Tokenizer / data | Llama-3 tokenizer; DCLM-Baseline docs ≥8K tokens from `gs://llama3-dclm-filter-8k` (train/val zarr), Books from `gs://llama3-books3`. Both Requester-Pays. |
+| Tokenizer / data | Llama-3 tokenizer. **Free path (decided):** DCLM-Baseline from HF `mlfoundations/dclm-baseline-1.0-parquet`, keep docs with ≥8193 Llama-3 tokens, tokenize, write zarr `/train` and `/val` (Task 2). 32K stage on **PG-19** (`deepmind/pg19`, public domain) instead of Books3. Paper's GCS buckets not used (Requester-Pays). Arm E's released checkpoint is scored on *our* val split; its published numbers are not compared directly. |
 | Sequence mixer | SWA k=8192 everywhere (`seq_modeling_block: SWA`); at 8K identical to full attention. |
 | Chunk (inner mini-batch) b | 1024 tokens. |
-| Contexts | Stage 1 meta-training + eval at 8K on DCLM; Stage 2 extension + eval at 32K on Books (mandatory). |
+| Contexts | Stage 1 meta-training + eval at 8K on DCLM; Stage 2 extension + eval at 32K on PG-19 (mandatory). |
+| Run order | **A → C → E → B → D → F** (A is evaluation-only and gives the reference number; C needs the Task 9 sweep first). No mechanical dependency between arms. |
 | Reset | Fast weights reset to W0 at every sequence boundary (train and eval), as in the paper. |
 | Inner loss / outer loss | Chunk i loss with W_{i−1}, then step; outer loss = mean over chunks of loss-before-update. |
 | Inner optimizer arm N (required) | Per-tensor normalized SGD: `W ← W − η_rms·√(numel)·g/(‖g‖_F + 1e-6)`, with a floor: if ‖g‖_F < 1e-6 skip the step. η_rms sweep {3e-4, 1e-3, 3e-3} (paper-equivalent per-element RMS ≈ 1/√11.5M ≈ 3e-4 is the 1× point). Global-norm variant as reference. Learned per-tensor multiplier `exp(θ_t)`, θ_t init 0, in the slow set. Inner-LR warmup 0.1→1.0 over the first 10% of outer steps. |
@@ -65,7 +66,7 @@ Compute estimate (planning only): second-order TTT ≈ 3.4× a standard step; 1.
 ### 0.4 Open items (must be resolved before the corresponding task; none block Task 1)
 1. **Della**: partition names, GPUs/job, walltime, scratch quota (`sinfo`, `sacctmgr show assoc user=hh9077`); Duo login prevents remote probing.
 2. **Pinned-host offload**: whether the JAX/CUDA on Della supports `save_and_offload_only_these_names(... "pinned_host")`; only needed for all-blocks AdamW.
-3. **GCS billing project** for Requester-Pays buckets (or email authors for a copy).
+3. **Arm E checkpoint**: `gs://ttt-e2e-checkpoints/1b_ttt_e2e_pretrain_dclm_8k_1x_cc` is Requester-Pays (a few GB, ≈$1); alternative is emailing the authors. Data buckets are no longer needed.
 4. **HF gated access** to `meta-llama/Llama-3.2-1B` (accept licence, `HF_TOKEN`).
 5. **Arm E at 32K**: the authors released `1b_ttt_e2e_pretrain_dclm_8k_1x_cc` and `1b_ttt_e2e_finetune_books_8k_1x_cc`, not a 1B 32K checkpoint; arm E at 32K = rerun `ext-1b-e2e-32K` from the released pretrain checkpoint (1250 steps × 1M tokens in their recipe; use the same for comparability).
 6. **Arm E vs A/C parameter matching**: arm E is the paper's 1B architecture (24 layers, d 2048, ff 4352+prime), not Llama-3.2-1B; it is a reference row, not a matched comparison. Decide whether to also train a Llama-3.2-shaped E (expensive: from-scratch meta-pretraining).
@@ -134,14 +135,27 @@ uv run --exact train +deploy=interactive +experiment=125m/pretrain/pretrain-125m
 
 ---
 
-### Task 2: Data on Della
+### Task 2: Data on Della (free path: HF parquet → zarr)
 
-**Files:** `scripts/della/fetch_data.sh`, `configs/deploy/della.yaml`
+**Files:** Create `scripts/prep_dclm.py`, `scripts/prep_pg19.py`, `tests/test_prep.py`, `configs/deploy/della.yaml`
 
-- [ ] **Step 1:** `gcloud storage cp -r --billing-project=$GCP_PROJECT gs://llama3-dclm-filter-8k /scratch/gpfs/$USER/data/` and same for `gs://llama3-books3` (Open item 3).
-- [ ] **Step 2:** `configs/deploy/della.yaml` copying `interactive.yaml` with `deploy_paths.data.dclm_filter_8k` and `books3` pointing at those paths and `checkpoint: /scratch/gpfs/${oc.env:USER}/ckpt`.
-- [ ] **Step 3: Test:** `python -c "import zarr; a=zarr.open_array('/scratch/gpfs/$USER/data/llama3-dclm-filter-8k', path='/val'); print(a.shape, a[:5])"` prints a token array starting with 128000 (BOS).
-- [ ] **Step 4: Commit.**
+**Interfaces:** Produces zarr stores `/scratch/gpfs/$USER/data/dclm8k/{train,val}` and `.../pg19/{train,val}` in the exact layout `ttt/dataloader/lm_dataset.py::Dataset` reads: one 1-D int32 array per split, documents concatenated, each document = `[128000 (BOS)] + tokens`, no padding.
+
+- [ ] **Step 1: Failing test**
+```python
+def test_zarr_layout(tmp_path):
+    write_split(tmp_path/"val", docs=[[5,6,7],[8,9]], bos=128000)
+    a = zarr.open_array(zarr.storage.LocalStore(str(tmp_path)), path="/val")
+    assert a.dtype == np.int32 and a[:].tolist() == [128000,5,6,7,128000,8,9]
+def test_filter_keeps_only_long_docs():
+    assert keep_doc(n_tokens=8193, min_tokens=8193) and not keep_doc(8192, 8193)
+```
+- [ ] **Step 2: Run → FAIL.**
+- [ ] **Step 3: Implement `scripts/prep_dclm.py`**: `datasets.load_dataset("mlfoundations/dclm-baseline-1.0-parquet", streaming=True, split="train")`; tokenizer `AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")`; for each `text`: tokenize without special tokens, keep if `len ≥ 8193`; assign to val if `hash(doc_id) % 200 == 0` (≈0.5%), else train; stop when train has `target_tokens` (default 2.0e9, enough for 1.3B headline + sweeps) and val has ≥ 64×8193×4 tokens; write with `zarr` BloscCodec zstd clevel 3 (same codec as e2e). Multiprocess tokenization (`num_proc = SLURM_CPUS_PER_TASK`). Log docs seen / kept.
+- [ ] **Step 4: Implement `scripts/prep_pg19.py`**: same, from `deepmind/pg19` (`train`/`validation` splits already defined by the dataset), keep books with ≥ 32769 tokens, target 1.5e9 train tokens.
+- [ ] **Step 5: `configs/deploy/della.yaml`**: `deploy_paths.data.dclm_filter_8k: /scratch/gpfs/${oc.env:USER}/data/dclm8k`, `deploy_paths.data.books3: /scratch/gpfs/${oc.env:USER}/data/pg19` (key name kept so upstream configs still resolve), `checkpoint: /scratch/gpfs/${oc.env:USER}/ckpt`.
+- [ ] **Step 6: Run** both scripts as a CPU sbatch job (`-c 32 --mem 128G -t 12:00:00`; expect several hours: long docs are a few percent of DCLM, so the stream has to pass roughly 100B tokens of parquet to collect 2B). Verify `zarr.open_array(...)[:5]` starts with 128000.
+- [ ] **Step 7: Commit** `feat: free data pipeline (DCLM parquet + PG-19 → zarr)`.
 
 ---
 
@@ -298,8 +312,8 @@ Also arm B's own inner sweep (3 runs) so it is not a straw man.
 
 ### Task 10: Headline runs and evaluation
 
-- [ ] 8K stage: arms A, B, C, D, F at fast_blocks=4, 1.3B tokens, 3 seeds for C and D. Eval: DCLM val loss, per-token curve, forgetting ΔNLL, peak memory, sec/1K tokens.
-- [ ] 32K stage: initialize from the 8K checkpoints (`load_part=params`), Books, 16×32K batch, 2600 steps; arms A, B, C, D, E, F. Same metrics on Books val at 32K.
+- [ ] Run in the order **A, C, E, B, D, F**. 8K stage: arms A, C, B, D, F at fast_blocks=4, 1.3B tokens, 3 seeds for C and D; arm E = released 1B checkpoint scored with `eval_mode=true` on our val split (Open item 3). Eval: DCLM val loss, per-token curve, forgetting ΔNLL, peak memory, sec/1K tokens.
+- [ ] 32K stage: initialize from the 8K checkpoints (`load_part=params`), PG-19, 16×32K batch, 2600 steps; same order A, C, E, B, D, F. Same metrics on PG-19 val at 32K.
 - [ ] Fast-fraction ablation: arm C (and B) at fast_blocks 8 and 16 at 32K.
 - [ ] SVD effective-rank curve on the r=256 checkpoint (port of the sayakpaul gist to NumPy: truncate ΔW=scale·B@A to k∈{4,8,16,32,64}, evaluate val loss per k).
 - [ ] Results: `docs/research/results.md` with the arm table (loss, Δ vs A, forgetting, deployed params, FLOPs/token, H100-hours) and the per-token plots. Commit.
