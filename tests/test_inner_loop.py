@@ -155,17 +155,20 @@ def test_gradient_flows_through_the_kv_cache_across_chunks():
     cfg, model, split = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
     _, ref = meta_grad(cfg, model, split, remat_group=1)
 
-    original = tmod.TTTTransformer.flatten_caches
+    # Save the DESCRIPTOR from the class __dict__, not the plain function that attribute
+    # access returns: reassigning the bare function would drop the staticmethod wrapper
+    # and make every later call pass `self` as the first argument.
+    original_desc = tmod.TTTTransformer.__dict__["flatten_caches"]
+    original_fn = original_desc.__func__
 
-    @staticmethod
     def detaching_flatten(caches):
-        return tuple(t.detach() for t in original(caches))
+        return tuple(t.detach() for t in original_fn(caches))
 
-    tmod.TTTTransformer.flatten_caches = detaching_flatten
+    tmod.TTTTransformer.flatten_caches = staticmethod(detaching_flatten)
     try:
         _, detached = meta_grad(cfg, model, split, remat_group=1)
     finally:
-        tmod.TTTTransformer.flatten_caches = original
+        tmod.TTTTransformer.flatten_caches = original_desc
 
     diff = max((a - b).abs().max().item() for a, b in zip(ref, detached, strict=True))
     assert diff > 1e-9, (
