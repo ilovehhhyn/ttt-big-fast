@@ -66,6 +66,11 @@ def main():
     print(f"one suffix chunk: logits dtype={logits.dtype} attn_out={seen.get('attn_out_dtype')} "
           f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
 
+    # Free the staged measurements: holding `prefix` and `logits` alive here made the
+    # full-sequence number cumulative rather than representative of a real run (it
+    # overstated 8K by ~17 GiB versus the actual runner).
+    del prefix, logits, caches
+    import gc; gc.collect(); torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     try:
         out = loop.run_sequence(ids, tgt, mask, dict(split.fast), lr_scale=1.0,
