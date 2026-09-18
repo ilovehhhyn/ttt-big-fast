@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Test whether TTT-E2E still works when the fast (inner-loop) weights are the full MLP matrices of a pretrained Transformer and the slow (outer-loop) weights are a small meta-learned set (LoRA on attention, norm gains, learned inner learning rates), evaluated with the paper's DCLM/Books protocol at 8K and 32K.
+**Goal:** Test whether TTT-E2E still works when the fast (inner-loop) weights are the full MLP matrices of a pretrained Transformer and the slow (outer-loop) weights are a small meta-learned set (LoRA on attention, norm gains, learned inner learning rates), evaluated with the paper's DCLM (8K) / PG-19 (32K) protocol.
 
 **Architecture:** Fork `test-time-training/e2e` (JAX/Equinox). Load Llama-3.2-1B weights into the e2e Transformer (adding GQA and Llama-3 RoPE scaling), run it with sliding-window attention (k=8192), and reuse the existing chunked inner loop (`scan_remat_chunk`, `SWA` KV-cache, `Evaluator`). New code: a `LoRALinear` module, parameter specs that make base MLPs inner-loop and LoRA/norms/inner-LRs outer-loop, two new inner optimizers (strictly normalized SGD, differentiable AdamW), a decay-toward-W0 knob, a forgetting probe, and Hydra configs for six experimental arms.
 
-**Tech Stack:** JAX 0.5.x + Equinox + Optax + Grain + Hydra + W&B (as in e2e); `uv`; Princeton Della (della-pli H100 80 GB, della-gh GH200 96 GB); HF `safetensors` for weight import; Llama-3 tokenized DCLM/Books zarr buckets from the paper.
+**Tech Stack:** JAX 0.5.x + Equinox + Optax + Grain + Hydra + W&B (as in e2e); `uv`; Princeton Della (della-pli H100 80 GB, della-gh GH200 96 GB); HF `safetensors` for weight import; DCLM parquet and PG-19 from Hugging Face, tokenized to zarr locally (free).
 
 **Spec:** `docs/research/FINDINGS.md` (sections 1–10) plus `docs/research/phase1_scoping/research_question_brief.md` (H1, arms, user directives). This plan copies every decided value verbatim; anything not decided is listed in §0.4 "Open items".
 
