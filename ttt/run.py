@@ -32,6 +32,7 @@ from ttt.config import Config, InnerConfig, LoRAConfig, OuterConfig, TrainConfig
 from ttt.data.dataset import build_dataloader
 from ttt.eval.evaluator import evaluate
 from ttt.model.naming import split_parameters
+from ttt.model.transformer import TTTTransformer
 from ttt.optim.inner import build_inner_optimizer
 from ttt.optim.outer import build_outer_optimizer
 from ttt.train.inner_loop import TTTInnerLoop
