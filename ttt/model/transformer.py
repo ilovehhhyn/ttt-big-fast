@@ -47,6 +47,13 @@ class TTTTransformer(nn.Module):
         self.norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
         self.lm_head = None if cfg.tie_word_embeddings else nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
 
+        # One learned log-multiplier per fast tensor (Meta-SGD / MAML++ LSLR, and LaCT's
+        # per-matrix learned inner LR). It is a SLOW parameter: the outer loop learns how
+        # fast each fast tensor should move. exp() keeps it positive; init 0 => multiplier 1.
+        self.inner_lr_log = nn.ParameterDict(
+            {self._mangle(k): nn.Parameter(torch.zeros(())) for k in self.fast_param_names()}
+        )
+
         cos, sin = build_rope_cache(cfg.head_dim, max_seq_len, cfg.rope)
         self.register_buffer("rope_cos", cos, persistent=False)
         self.register_buffer("rope_sin", sin, persistent=False)
@@ -56,6 +63,27 @@ class TTTTransformer(nn.Module):
     @property
     def first_fast_layer(self) -> int:
         return self.cfg.first_fast_layer
+
+    @staticmethod
+    def _mangle(name: str) -> str:
+        """nn.ParameterDict keys cannot contain '.'"""
+        return name.replace(".", "__")
+
+    def fast_param_names(self) -> list[str]:
+        """The MLP projections of the last `fast_blocks` blocks, in a fixed order.
+
+        Must agree with ttt.model.naming.is_fast_param; tested in test_trainer.py.
+        """
+        return [
+            f"blocks.{i}.mlp.{w}.weight"
+            for i in range(self.cfg.first_fast_layer, self.cfg.num_layers)
+            for w in ("w1", "w2", "w3")
+        ]
+
+    def inner_lr_multipliers(self) -> dict[str, Tensor]:
+        """exp(inner_lr_log), keyed by fast-parameter name. Stays in the graph: it is
+        meta-learned, so detaching it would silently freeze the learned inner LR."""
+        return {k: torch.exp(self.inner_lr_log[self._mangle(k)]) for k in self.fast_param_names()}
 
     def _rope_slice(self, start: int, length: int) -> tuple[Tensor, Tensor]:
         assert start + length <= self.max_seq_len, (

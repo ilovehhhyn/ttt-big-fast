@@ -39,7 +39,10 @@ def test_key_map_is_complete_and_injective():
 
 
 def test_key_map_covers_every_model_parameter():
-    """Every non-LoRA parameter of our model must receive a pretrained tensor."""
+    """Every pretrained-backed parameter must receive an HF tensor.
+
+    LoRA adapters (B=0, A random) and the learned inner-LR log scalars (init 0) are
+    new slow parameters with no Llama counterpart, so they are excluded by design."""
     from ttt.model.transformer import TTTTransformer
     cfg = model_config_from_hf(LLAMA32_1B_CONFIG, window_size=8192, chunk_size=1024, fast_blocks=4)
     cfg_small = type(cfg)(**{**cfg.__dict__, "num_layers": 2, "vocab_size": 64,
@@ -48,7 +51,8 @@ def test_key_map_covers_every_model_parameter():
                              "fast_blocks": 1})
     model = TTTTransformer(cfg_small, max_seq_len=16)
     targets = set(hf_key_map(cfg_small.num_layers, tied=True).values())
-    own = {n for n, _ in model.named_parameters() if "lora_" not in n}
+    own = {n for n, _ in model.named_parameters()
+           if "lora_" not in n and not n.startswith("inner_lr_log.")}
     assert own == targets, f"unmapped: {sorted(own - targets)} | extra: {sorted(targets - own)}"
 
 

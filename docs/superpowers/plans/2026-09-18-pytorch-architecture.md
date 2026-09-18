@@ -91,3 +91,31 @@ Ordered for the A→C→E→B→D→F run order; Tasks 1–8 are shared infrastr
 - All unit tests run on CPU with a tiny config (2 layers, d=32, 4 heads, 2 KV heads, ff=64, vocab=128, window=8, chunk=4, T=16) in under 10 s total.
 - Numerical tests use `torch.float64` where exactness matters (gradient checks via `torch.autograd.gradcheck`).
 - No `try/except` fallbacks. Invalid config raises immediately.
+
+## Arm E: a free checkpoint, and what it needs
+
+`gs://ttt-e2e-checkpoints/*` is requester-pays, so it is out. `Luxel/ttt-e2e-760m-results`
+on Hugging Face is a **third-party reproduction** of TTT-E2E 760M (orbax format, free)
+containing three stages: `S2_ADAPT/adapt-760m-e2e-8K-from-fa`, `S2/ext-760m-e2e-32K-from-fa-bridge`,
+`S3/ext-760m-e2e-32K`, each with `experiment/resolved_config.yaml` and per-position NLL curves.
+Its resolved config matches the paper's 760M recipe exactly:
+
+    num_hidden_layers 24, hidden_size 1536, intermediate_size 3328, num_attention_heads 16,
+    vocab_size 128256, tie_word_embeddings true, rope_theta 500000, qk_norm true,
+    pre_norm true, post_norm true, prime true, suffix_len 6,
+    mini_batch_size 1024, sliding_window_size 8192, seq_length 32768,
+    inner: sgd lr 1.0 (+ clip 1.0), outer: adamw lr 4e-4, train_mode meta
+
+Because it is not the authors' own release, any number from it is labelled
+"third-party reproduction" in the results table.
+
+Three architecture features arm E needs that arms A/C do not (Llama-3.2 has none of them):
+1. **QK-norm** - RMSNorm on q and k per head before RoPE.
+2. **post_norm** - a second RMSNorm on each sublayer output, i.e.
+   `x = x + post_norm(attn(pre_norm(x)))` rather than `x = x + attn(pre_norm(x))`.
+3. **prime MLP** - a SECOND SwiGLU MLP inserted in each suffix block, which is the fast
+   weight; the block's original MLP stays static as "safe storage" (paper 2.3.1). Block
+   forward becomes: seq -> (+prime MLP) -> (+MLP).
+Plus an orbax/tensorstore reader to convert the JAX pytree to our parameter names.
+
+These are additive and gated by config flags, so they cannot affect arms A/C.
