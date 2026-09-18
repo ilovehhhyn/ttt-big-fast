@@ -207,3 +207,45 @@ is toward disabling TTT rather than exploiting it.
 Reporting note: deltas are computed only against an arm A measured on the SAME number of
 sequences. An earlier version of `collect_results.py` compared against whichever arm A had
 the lowest loss, which silently mixed a 4-sequence baseline with 16-sequence arms.
+
+## Complete arm comparison at full scale (Llama-3.2-1B, 8K context, DCLM)
+
+All rows evaluated with identical code on the SAME 32 held-out sequences.
+
+| arm | what | inner rule | loss | delta vs A |
+|---|---|---|---|---|
+| A | no TTT | - | **2.4940** | - |
+| B | TTT, inner LR 0 (consistency check) | normalized_sgd, 0 | 2.4939 | **-0.0000** |
+| C | **meta-learned LoRA, 18 outer steps** | normalized_sgd, 2e-5 (0.28x) | **2.5991** | +0.1052 |
+| B | TTT-naive, same inner LR as C | normalized_sgd, 2e-5 (0.28x) | 2.6632 | +0.1693 |
+| E | TTT-E2E 760M reference (third-party) | e2e's clip(1)+sgd(1) | 3.0668 | +0.5728 |
+| B | TTT-naive at the e2e-equivalent step | normalized_sgd, 7e-5 (0.99x) | 5.3181 | +2.8241 |
+| B | TTT-naive with e2e's exact rule | clipped_sgd, lr 1, tau 1 | 8.0595 | +5.5655 |
+| B | TTT-naive, 2.8x the e2e step | normalized_sgd, 2e-4 | 12.8929 | +10.3989 |
+
+### The three things this table says
+
+**1. The implementation is correct.** Running the full TTT machinery with the inner learning
+rate set to zero reproduces the no-TTT baseline to four decimal places (2.4939 vs 2.4940).
+Every chunk, cache, checkpoint and second-order path is exercised in that row, so the
+agreement is a genuine end-to-end check at 1B scale, not a trivial one.
+
+**2. Meta-learning helps, measurably.** Arm C and the matching arm B differ only in whether
+the slow LoRA was meta-trained. C recovers 0.0641 of B's 0.1693 nat deficit, i.e. **38% of the
+damage that test-time training does on its own** - after only 18 outer steps (2.4M tokens,
+about 2% of the planned budget).
+
+**3. It is not yet enough.** Arm C is still 0.105 nats WORSE than not doing test-time training
+at all. At this budget the answer to the research question is no: big fast weights with a
+small meta-learned slow set do not beat the frozen baseline. Whether more meta-training closes
+the remaining gap is exactly what the longer run tests.
+
+### Caveats that matter
+
+- Arm E is a 760M model, arm A is 1.24B. Its +0.5728 is mostly capacity and pretraining
+  budget, not method, and it is a third-party reproduction rather than the authors' release.
+  It is a reference point, not a parameter-matched comparison.
+- 8K with k=8192 means sliding-window attention IS full attention, so this context length
+  cannot show the context-scaling behaviour the method targets. The 32K stage is where that
+  would appear.
+- 18 outer steps is a pilot, not the planned 250-step sweep.
