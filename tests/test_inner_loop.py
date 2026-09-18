@@ -137,3 +137,38 @@ def test_adamw_inner_runs_and_flows():
     assert torch.isfinite(out.loss)
     assert all(torch.isfinite(g).all() for g in grads)
     assert max(g.abs().max().item() for g in grads) > 0
+
+
+def test_gradient_flows_through_the_kv_cache_across_chunks():
+    """The KV cache is part of the differentiable carry, not a detached buffer.
+
+    Keys and values cached during chunk j are computed from hidden states that depend on
+    the fast weights of earlier chunks (for every fast block above the first). If the
+    cache were detached at chunk boundaries, later chunks' losses would lose their
+    dependence on earlier inner updates and the meta-gradient would be silently wrong.
+
+    We detect this by comparing the meta-gradient against a run where the cache IS
+    detached between chunks: the two must differ.
+    """
+    import ttt.model.transformer as tmod
+
+    cfg, model, split = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
+    _, ref = meta_grad(cfg, model, split, remat_group=1)
+
+    original = tmod.TTTTransformer.flatten_caches
+
+    @staticmethod
+    def detaching_flatten(caches):
+        return tuple(t.detach() for t in original(caches))
+
+    tmod.TTTTransformer.flatten_caches = detaching_flatten
+    try:
+        _, detached = meta_grad(cfg, model, split, remat_group=1)
+    finally:
+        tmod.TTTTransformer.flatten_caches = original
+
+    diff = max((a - b).abs().max().item() for a, b in zip(ref, detached, strict=True))
+    assert diff > 1e-9, (
+        "detaching the KV cache did not change the meta-gradient, so gradients are not "
+        "flowing through the cache across chunk boundaries"
+    )
