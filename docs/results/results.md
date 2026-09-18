@@ -49,3 +49,41 @@ forward with fp32 master weights (e2e's compute_dtype/param_dtype split), and an
 per-block recompute during backward (e2e's `remat_block`). Fast weights stay fp32 because
 a unit-norm inner step spread over 2e8 elements moves each element by ~1e-4, which is at
 the bf16 resolution of a 0.02-scale weight.
+
+## Measured memory of the second-order path (A100-80GB, Llama-3.2-1B)
+
+Probe: `scripts/memory_probe.py`, bf16 autocast, LoRA r=64, fast_blocks=4.
+
+| stage | peak |
+|---|---|
+| model resident (fp32 master weights) | 4.66 GiB |
+| + prefix forward over the full sequence | 10.90 GiB (8K: 16.50) |
+| + one suffix chunk forward | 18.37 GiB |
+
+Sequence length 4096 (4 chunks), varying the checkpoint group size:
+
+| remat_group | forward peak | backward |
+|---|---|---|
+| 1 | 33.94 GiB | OOM (77.0 GiB) |
+| 2 | 65.96 GiB | OOM (77.7 GiB) |
+| 4 | OOM in forward | OOM (77.7 GiB) |
+
+Two things this settles:
+
+1. **Checkpointing through time works.** Going from group 2 to group 1 halves forward
+   peak (65.96 -> 33.94 GiB), the expected `(N/g + g)` behaviour.
+2. **The binding cost is the BACKWARD, not the forward.** At group 1 the forward fits in
+   34 GiB, then backward adds ~43 GiB while recomputing a single chunk. The cause is
+   double backward through the math SDPA backend, which the second-order path forces
+   (fused kernels have no double backward). Forcing MATH materialises a
+   [heads, chunk, window+chunk] score matrix and its grad-of-grad intermediates.
+
+So the plan's estimate in section 0.2, which counted only fast-weight copies
+`(N/g + g) * |W|`, understated the real requirement: it omitted the attention
+double-backward term, which dominates at this model size. The corrected picture is that
+per-chunk backward cost scales with `fast_blocks * heads * chunk * (window + chunk)`,
+not with the fast-weight count.
+
+One observation worth noting for the record: `torch.autocast` leaves the residual stream
+in fp32 (the embedding output is fp32 and each residual add keeps that dtype), so the
+prefix output is fp32 even under bf16 autocast. Only the matmuls run in bf16.
