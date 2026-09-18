@@ -119,3 +119,30 @@ Three architecture features arm E needs that arms A/C do not (Llama-3.2 has none
 Plus an orbax/tensorstore reader to convert the JAX pytree to our parameter names.
 
 These are additive and gated by config flags, so they cannot affect arms A/C.
+
+## Correction: the inner learning-rate scale (found by running it)
+
+Plan 2026-09-17 section 0.2 set the inner-LR sweep to {3e-4, 1e-3, 3e-3} with "the
+paper-equivalent per-element RMS approximately 1/sqrt(11.5M) = 3e-4 is the 1x point".
+That 11.5M is the paper's prime-MLP size at 125M scale. Our fast set is the MLPs of 4
+Llama-3.2-1B blocks: **201,326,592 parameters**. TTT-E2E's rule is
+`clip_by_global_norm(1.0)` then `sgd(lr=1.0)`, so when the gradient norm exceeds 1 the
+whole update has Frobenius norm 1 spread over ALL fast parameters, giving a per-element
+RMS step of
+
+    1 / sqrt(201,326,592) = 7.05e-5
+
+Against a Llama MLP weight scale of about 2e-2, that is 0.35% of the weight scale per
+chunk, or 2.8% over an 8-chunk sequence. The planned 1e-3 is **14x larger**: 5% per chunk
+and 40% over the sequence. Measured consequence at 1e-3: held-out loss 20.2 versus the
+arm A baseline of 2.55, with outer gradient norms reaching 9e7.
+
+**Corrected sweep**: centre on 7e-5, i.e. {2e-5, 7e-5, 2e-4}, and always report the
+multiple of the e2e-equivalent step alongside the raw value. `scripts/della/scan_inner_lr.sbatch`
+measures arm B across {0, 7e-6, 2e-5, 7e-5, 2e-4, 7e-4} plus e2e's exact rule
+(`--inner clipped_sgd --inner-lr 1.0`), which is now implemented as `ClippedSGD` and
+differs from `NormalizedSGD` only when the gradient norm is below the threshold.
+
+General rule this exposes: an inner LR expressed as a per-element RMS step is NOT
+transferable across fast-weight set sizes. Always restate it as a multiple of
+1/sqrt(n_fast) for the configuration actually being run.
