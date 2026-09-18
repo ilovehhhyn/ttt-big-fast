@@ -245,9 +245,11 @@ class TTTInnerLoop:
         # attention, its norms), so the graph cannot simply be detached. The prefix has
         # no fast-weight dependency, so it needs only a FIRST-order backward and one
         # recomputation.
+        seg = self.cfg.train.prefix_segment or None
+
         def _prefix(ids):
             with self._autocast(ids.device.type):
-                return self.model.prefix_forward(ids)
+                return self.model.prefix_forward(ids, segment=seg)
 
         prefix_out = checkpoint(_prefix, input_ids, use_reentrant=False)  # [1, T, d]
 

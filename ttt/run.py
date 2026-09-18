@@ -85,6 +85,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     outer = OuterConfig(lr=args.outer_lr, total_steps=args.steps)
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
+                        prefix_segment=args.prefix_segment,
                         slow_spec=arm["slow"] or ("__none__",), dtype=args.dtype)
     cfg = Config(model=model.cfg, inner=inner, outer=outer, train=train)
     split = split_parameters(model, model.cfg, cfg.train)
@@ -112,6 +113,7 @@ def _build_arm_e(args, arm, device):
                         clip_tau=args.clip_tau, learned_lr=False)
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
+                        prefix_segment=args.prefix_segment,
                         slow_spec=("__none__",), dtype=args.dtype)
     cfg = Config(model=mcfg, inner=inner, outer=OuterConfig(lr=0.0, total_steps=1), train=train)
     split = split_parameters(model, mcfg, cfg.train)
@@ -132,6 +134,8 @@ def main() -> None:
     p.add_argument("--window", type=int, default=8192)
     p.add_argument("--fast-blocks", type=int, default=4)
     p.add_argument("--remat-group", type=int, default=0)
+    p.add_argument("--prefix-segment", type=int, default=0,
+                   help="segment the frozen prefix (0 = one shot); must divide seq_len and be <= window")
     p.add_argument("--remat-blocks", action="store_true",
                    help="recompute each suffix block during backward (big memory win)")
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp32"])

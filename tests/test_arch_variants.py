@@ -80,3 +80,25 @@ def test_arm_e_shape_runs_end_to_end():
     assert logits.shape == (1, 4, 32)
     g = torch.autograd.grad(logits.sum(), [sp.fast[k] for k in sorted(sp.fast)], create_graph=True)
     assert all(torch.isfinite(x).all() and x.abs().sum() > 0 for x in g)
+
+
+def test_prefix_segmented_equals_full():
+    """Segmenting the prefix must be numerically exact, not an approximation.
+
+    Sliding-window attention looks back at most `window_size`, and the rolling cache
+    carries exactly that, so a segmented prefix sees the same keys/values as a one-shot
+    prefix. Run in float64 where the window genuinely rolls (T > window).
+    """
+    c = cfg(num_layers=6, fast_blocks=2, window_size=8, chunk_size=4)  # prefix = 4 blocks
+    m = TTTTransformer(c, max_seq_len=32).double()
+    ids = torch.randint(0, c.vocab_size, (1, 32))
+    full = m.prefix_forward(ids)
+    for seg in (4, 8):  # segment must be <= window_size (8)
+        got = m.prefix_forward(ids, segment=seg)
+        assert got.shape == full.shape
+        assert torch.allclose(got, full, atol=1e-10), f"segment={seg}: {(got - full).abs().max()}"
+
+    import pytest as _pytest
+
+    with _pytest.raises(AssertionError, match="must be <= window_size"):
+        m.prefix_forward(ids, segment=16)

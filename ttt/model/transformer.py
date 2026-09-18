@@ -149,14 +149,51 @@ class TTTTransformer(nn.Module):
 
     # ---------------------------------------------------------------- forward
 
-    def prefix_forward(self, input_ids: Tensor) -> Tensor:
-        """Run the frozen prefix over the whole sequence in one shot. [B, T] -> [B, T, d]."""
+    def prefix_forward(self, input_ids: Tensor, *, segment: int | None = None) -> Tensor:
+        """Run the frozen prefix. [B, T] -> [B, T, d].
+
+        The prefix has no fast-weight dependency, but its activations are still held for
+        the slow-parameter gradient, so running all `first_fast_layer` blocks over the
+        whole sequence at once costs O(T). Measured at 32K with 12 prefix blocks that is
+        72 GiB, which alone exhausts an 80 GiB card before the TTT loop even starts.
+
+        Processing the prefix in segments with a rolling KV cache bounds it to one
+        segment's activations. This is exact, not an approximation: sliding-window
+        attention only ever looks back `window_size` tokens, and the cache carries
+        exactly that history, so segmented and one-shot outputs agree (asserted by
+        test_prefix_segmented_equals_full).
+
+        `segment=None` keeps the one-shot path, which stays cheapest when T is small.
+        """
         b, t = input_ids.shape
         h = self.embed_tokens(input_ids)
-        cos, sin = self._rope_slice(0, t)
-        for i in range(self.first_fast_layer):
-            h, _ = self.blocks[i](h, cos, sin, None)
-        return h
+        if segment is None:
+            cos, sin = self._rope_slice(0, t)
+            for i in range(self.first_fast_layer):
+                h, _ = self.blocks[i](h, cos, sin, None)
+            return h
+
+        assert t % segment == 0, f"seq_len {t} must be divisible by prefix segment {segment}"
+        # The cached attention path attends to [cache, segment], and the cache holds
+        # exactly window_size positions, so a segment longer than the window cannot be
+        # served from it.
+        assert segment <= self.cfg.window_size, (
+            f"prefix segment {segment} must be <= window_size {self.cfg.window_size}"
+        )
+        n_pre = self.first_fast_layer
+        caches = [
+            KVCache.empty(b, self.cfg.window_size, self.cfg.num_kv_heads, self.cfg.head_dim,
+                          device=h.device, dtype=h.dtype)
+            for _ in range(n_pre)
+        ]
+        outs = []
+        for s in range(0, t, segment):
+            x = h[:, s : s + segment]
+            cos, sin = self._rope_slice(s, segment)
+            for i in range(n_pre):
+                x, caches[i] = self.blocks[i](x, cos, sin, caches[i])
+            outs.append(x)
+        return torch.cat(outs, dim=1)
 
     def suffix_forward(
         self,

@@ -166,7 +166,11 @@ class TrainConfig:
     seq_len: int = 8192
     tokens_per_step: int = 524288  # 0.5M tokens per outer step
     micro_batch: int = 1  # sequences per forward; fast weights are per-sequence
-    remat_group: int = 0  # 0 -> round(sqrt(num_chunks))
+    remat_group: int = 0  # 0 -> nearest divisor of num_chunks to sqrt(num_chunks)
+    # Segment length for the frozen prefix. 0 = one shot over the whole sequence, which
+    # is cheapest at short T; at 32K the one-shot prefix costs 72 GiB on its own, so it
+    # must be segmented. Must divide seq_len and be <= window_size.
+    prefix_segment: int = 0
     slow_spec: tuple[str, ...] = ("lora_A", "lora_B", "norm.weight", "inner_lr_log")
     seed: int = 0
     dtype: Literal["bf16", "fp32"] = "bf16"
