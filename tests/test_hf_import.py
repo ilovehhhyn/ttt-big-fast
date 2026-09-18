@@ -64,7 +64,11 @@ def test_logits_match_hf():
     from ttt.utils.hf_import import build_llama_ttt
 
     seq_len, chunk = 256, 64
-    ids = torch.tensor([[128000, 791, 6864, 315, 9822, 374] * 42], dtype=torch.long)[:, :seq_len]
+    # Exactly seq_len tokens: BOS then a repeating pattern, so every chunk is full.
+    pattern = [791, 6864, 315, 9822, 374, 12366, 13]
+    body = (pattern * (seq_len // len(pattern) + 1))[: seq_len - 1]
+    ids = torch.tensor([[128000] + body], dtype=torch.long)
+    assert ids.shape == (1, seq_len)
 
     hf = AutoModelForCausalLM.from_pretrained(MIRROR_REPO, torch_dtype=torch.float32)
     hf.eval()
