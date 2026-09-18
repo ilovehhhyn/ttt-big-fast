@@ -123,7 +123,7 @@ class InnerConfig:
     muon:            W <- W - lr_rms * sqrt(max(m,n)) * NewtonSchulz5(g)
     """
 
-    optimizer: Literal["none", "normalized_sgd", "adamw", "muon"] = "normalized_sgd"
+    optimizer: Literal["none", "normalized_sgd", "adamw", "muon", "clipped_sgd"] = "normalized_sgd"
     lr_rms: float = 1e-3
     norm_scope: Literal["tensor", "global"] = "tensor"
     eps_norm: float = 1e-6  # normalized_sgd denominator floor
@@ -134,6 +134,7 @@ class InnerConfig:
     learned_lr: bool = True  # per-tensor log-multiplier, a slow parameter
     delta_decay: float = 0.0  # lambda: W <- W0 + (1-lambda)(W - W0) before each step
     lr_warmup_frac: float = 0.1  # fraction of outer steps to ramp lr_rms 0.1x -> 1x
+    clip_tau: float = 1.0  # clipped_sgd only: global-norm clip threshold (e2e uses 1.0)
 
     def __post_init__(self) -> None:
         assert self.lr_rms >= 0.0

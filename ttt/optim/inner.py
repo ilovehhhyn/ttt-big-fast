@@ -335,6 +335,34 @@ class MuonNoMomentum(InnerOptimizer):
         return new_fast, {}
 
 
+class ClippedSGD(InnerOptimizer):
+    """TTT-E2E's exact inner rule, for the arm E reference.
+
+        W <- W - lr * g / max(1, ||g||_global / tau)
+
+    This is `optax.chain(clip_by_global_norm(tau), sgd(lr))` with tau = 1 and lr = 1,
+    which is what every `configs/experiment/*-e2e-*.yaml` in the reference repo sets.
+    It differs from NormalizedSGD in exactly one place: when ||g|| < tau the step is
+    NOT rescaled, so small late-chunk gradients produce correspondingly small steps
+    instead of unit-RMS ones. State is empty.
+    """
+
+    def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
+        return {}
+
+    def step(self, fast, grads, state, *, lr_scale=1.0, lr_mult=None):
+        _check_keys(fast, grads, lr_mult)
+        keys = sorted(fast)
+        sq = torch.stack([grads[k].reshape(-1).pow(2).sum() for k in keys]).sum()
+        gnorm = sq.sqrt()
+        # max(1, ||g||/tau): a differentiable clamp, exactly optax's clip_by_global_norm.
+        denom = torch.clamp(gnorm / self.cfg.clip_tau, min=1.0)
+        new_fast = {}
+        for k in keys:
+            new_fast[k] = fast[k] - _lr(self.cfg, k, lr_scale, lr_mult) * grads[k] / denom
+        return new_fast, {}
+
+
 def build_inner_optimizer(cfg: InnerConfig) -> InnerOptimizer:
     """'none' -> a NoOpInnerOptimizer whose step returns fast unchanged."""
     table: dict[str, type[InnerOptimizer]] = {
@@ -342,6 +370,7 @@ def build_inner_optimizer(cfg: InnerConfig) -> InnerOptimizer:
         "normalized_sgd": NormalizedSGD,
         "adamw": DifferentiableAdamW,
         "muon": MuonNoMomentum,
+        "clipped_sgd": ClippedSGD,
     }
     assert cfg.optimizer in table, f"unknown inner optimizer: {cfg.optimizer!r}"
     return table[cfg.optimizer](cfg)

@@ -65,7 +65,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
 
     inner = InnerConfig(optimizer=arm["inner"] if args.inner is None else args.inner,
                         lr_rms=args.inner_lr, norm_scope=args.norm_scope,
-                        eps=args.adam_eps, beta1=0.9, beta2=0.9, warm_start=True,
+                        eps=args.adam_eps, clip_tau=args.clip_tau, beta1=0.9, beta2=0.9, warm_start=True,
                         learned_lr=bool(arm["slow"]) and "inner_lr_log" in arm["slow"],
                         delta_decay=args.delta_decay)
     outer = OuterConfig(lr=args.outer_lr, total_steps=args.steps)
@@ -96,10 +96,12 @@ def main() -> None:
     p.add_argument("--dtype", default="bf16", choices=["bf16", "fp32"])
     p.add_argument("--tokens-per-step", type=int, default=524288)
     p.add_argument("--steps", type=int, default=250)
-    p.add_argument("--inner", default=None, choices=[None, "none", "normalized_sgd", "adamw", "muon"])
+    p.add_argument("--inner", default=None,
+                   choices=[None, "none", "normalized_sgd", "adamw", "muon", "clipped_sgd"])
     p.add_argument("--inner-lr", type=float, default=1e-3)
     p.add_argument("--norm-scope", default="tensor", choices=["tensor", "global"])
     p.add_argument("--adam-eps", type=float, default=1e-8)
+    p.add_argument("--clip-tau", type=float, default=1.0)
     p.add_argument("--delta-decay", type=float, default=0.0)
     p.add_argument("--outer-lr", type=float, default=1e-3)
     p.add_argument("--lora-rank", type=int, default=None)
