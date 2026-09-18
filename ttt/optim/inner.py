@@ -71,6 +71,11 @@ class InnerOptimizer(ABC):
         self.cfg = cfg
 
     @property
+    def is_noop(self) -> bool:
+        """True if step() is the identity, so the caller may skip the inner gradient."""
+        return False
+
+    @property
     def needs_first_grad(self) -> bool:
         """True if init_state requires the first chunk's gradient (AdamW warm start).
 
@@ -97,6 +102,10 @@ class InnerOptimizer(ABC):
 
 
 class NoOpInnerOptimizer(InnerOptimizer):
+    @property
+    def is_noop(self) -> bool:
+        return True
+
     """cfg.optimizer == 'none': the fast weights never move (ablation baseline)."""
 
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:

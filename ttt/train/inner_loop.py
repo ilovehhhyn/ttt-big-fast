@@ -162,6 +162,11 @@ class TTTInnerLoop:
         )
         loss, token_nll = masked_cross_entropy(logits, targets, loss_mask)
 
+        if self.inner_opt.is_noop:
+            # Arm A (no TTT): skip the inner gradient entirely. Computing it and
+            # discarding it would double the cost of the baseline for no effect.
+            return fast, opt_state, caches, loss, token_nll
+
         keys = self._fast_keys(fast)
         grads = torch.autograd.grad(
             loss, [fast[k] for k in keys], create_graph=True, allow_unused=False

@@ -73,6 +73,7 @@ def evaluate(
     """
     seq_len = loop.cfg.train.seq_len
     lr_mult = lr_multipliers(loop)
+    probe = None if probe_batch is None else _move(probe_batch, device)
 
     loss_sum: Tensor | None = None
     nll_sum: Tensor | None = None
@@ -104,7 +105,7 @@ def evaluate(
             loss_sum = seq_loss if loss_sum is None else loss_sum + seq_loss
             nll_sum = seq_nll if nll_sum is None else nll_sum + seq_nll
             if probe_batch is not None:
-                delta = probe_delta_nll(loop, split, fast_final, _move(probe_batch, device))
+                delta = probe_delta_nll(loop, split, fast_final, probe)
                 forget_sum = delta if forget_sum is None else forget_sum + delta
             count += 1
         if max_sequences is not None and count >= max_sequences:
