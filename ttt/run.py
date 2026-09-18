@@ -39,6 +39,10 @@ from ttt.train.trainer import Trainer
 from ttt.utils.hf_import import MIRROR_REPO, build_llama_ttt
 
 ARMS = {
+    # Arm E is the reference TTT-E2E model: a different architecture (24 layers, prime
+    # MLPs, qk-norm, post-norm) loaded from a converted orbax checkpoint, scored on our
+    # split. It is evaluation-only and uses e2e's exact inner rule.
+    "E": dict(inner="clipped_sgd", lora_rank=0, slow=()),
     "A": dict(inner="none", lora_rank=0, slow=()),
     "B": dict(inner="normalized_sgd", lora_rank=0, slow=()),
     "C": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log")),
@@ -50,6 +54,8 @@ ARMS = {
 def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoop, torch.device]:
     arm = ARMS[args.arm]
     device = torch.device(args.device)
+    if args.arm == "E":
+        return _build_arm_e(args, arm, device)
     lora = LoRAConfig(rank=args.lora_rank if args.lora_rank is not None else arm["lora_rank"],
                       alpha=args.lora_alpha, scaling="rslora",
                       targets=tuple(args.lora_targets.split(",")))
@@ -78,6 +84,33 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     return cfg, model, split, loop, device
 
 
+def _build_arm_e(args, arm, device):
+    """Arm E: the reference TTT-E2E 760M model from a converted orbax checkpoint."""
+    from ttt.utils.orbax_import import e2e_760m_config
+
+    assert args.e2e_ckpt, "--e2e-ckpt is required for arm E"
+    mcfg = e2e_760m_config(window_size=args.window, chunk_size=args.chunk,
+                           fast_blocks=args.e2e_fast_blocks)
+    model = TTTTransformer(mcfg, max_seq_len=args.seq_len).to(torch.float32)
+    state = torch.load(args.e2e_ckpt, map_location="cpu")
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    # inner_lr_log is ours, not the checkpoint's; nothing else may be missing.
+    unexplained = [m for m in missing if not m.startswith("inner_lr_log.")]
+    assert not unexplained, f"checkpoint is missing {len(unexplained)} tensors: {unexplained[:5]}"
+    assert not unexpected, f"checkpoint has {len(unexpected)} unexpected tensors: {unexpected[:5]}"
+    model = model.to(device)
+
+    inner = InnerConfig(optimizer=args.inner or arm["inner"], lr_rms=args.inner_lr,
+                        clip_tau=args.clip_tau, learned_lr=False)
+    train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
+                        micro_batch=1, remat_group=args.remat_group,
+                        slow_spec=("__none__",), dtype=args.dtype)
+    cfg = Config(model=mcfg, inner=inner, outer=OuterConfig(lr=0.0, total_steps=1), train=train)
+    split = split_parameters(model, mcfg, cfg.train)
+    loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
+    return cfg, model, split, loop, device
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--arm", required=True, choices=sorted(ARMS))
@@ -102,6 +135,8 @@ def main() -> None:
     p.add_argument("--norm-scope", default="tensor", choices=["tensor", "global"])
     p.add_argument("--adam-eps", type=float, default=1e-8)
     p.add_argument("--clip-tau", type=float, default=1.0)
+    p.add_argument("--e2e-ckpt", default=None, help="arm E: converted orbax state dict (.pt)")
+    p.add_argument("--e2e-fast-blocks", type=int, default=6, help="arm E suffix_len (paper: 6)")
     p.add_argument("--delta-decay", type=float, default=0.0)
     p.add_argument("--outer-lr", type=float, default=1e-3)
     p.add_argument("--lora-rank", type=int, default=None)
