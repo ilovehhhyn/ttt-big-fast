@@ -46,6 +46,13 @@ ARMS = {
     "E": dict(inner="clipped_sgd", lora_rank=0, slow=()),
     "A": dict(inner="none", lora_rank=0, slow=()),
     "B": dict(inner="normalized_sgd", lora_rank=0, slow=()),
+    # Arm C's slow set includes LoRA on the MLP (w1,w2,w3), i.e. on the fast weights
+    # themselves. That is NOT redundant: in TTT-E2E the fast-weight INITIALISATION W0 is
+    # the single most important slow parameter (their outer loop optimises it directly).
+    # We cannot meta-learn all of W0 from a frozen pretrained model, but a rank-r shift of
+    # it is exactly the mechanism that makes W0 a good starting point for test-time
+    # updates. Omitting it removes the main lever. Attention LoRA additionally shapes what
+    # gets written into the fast memory.
     "C": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log")),
     "D": dict(inner="normalized_sgd", lora_rank=0, slow=("**",)),
     "F": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log")),
@@ -142,7 +149,9 @@ def main() -> None:
     p.add_argument("--outer-lr", type=float, default=1e-3)
     p.add_argument("--lora-rank", type=int, default=None)
     p.add_argument("--lora-alpha", type=float, default=16.0)
-    p.add_argument("--lora-targets", default="wq,wk,wv,wo")
+    p.add_argument("--lora-targets", default="wq,wk,wv,wo,w1,w2,w3",
+                   help="w1,w2,w3 put LoRA on the fast MLPs, meta-learning a rank-r shift "
+                        "of the fast-weight initialisation W0")
     p.add_argument("--eval-sequences", type=int, default=64)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
