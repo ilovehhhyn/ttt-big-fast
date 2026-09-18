@@ -144,6 +144,9 @@ class _BinWriter:
     def finalize(self, meta: dict) -> dict:
         """Write the sidecar json and return the metadata actually stored."""
         self.close()
+        # The writer is the authority on which separator it actually wrote, so the
+        # sidecar records self.bos_id unless the caller explicitly overrides it.
+        meta = {"bos_token_id": self.bos_id, **meta}
         return write_meta(self.out_dir, self.split, meta, num_tokens=self.num_tokens, num_docs=self.num_docs)
 
 
@@ -293,7 +296,9 @@ def prepare(spec: PrepareSpec, *, progress: bool = True) -> dict:
     out_dir = Path(spec.out_dir)
     stats = _Stats()
     source = f"{spec.dataset}:{spec.split}"
+    bos_id = resolve_bos_id(tokenizer)
     base_meta = {
+        "bos_token_id": bos_id,
         "tokenizer": spec.tokenizer_id,
         "min_doc_tokens": spec.min_doc_tokens,
         "source": source,
@@ -302,8 +307,6 @@ def prepare(spec: PrepareSpec, *, progress: bool = True) -> dict:
         "val_every": spec.val_every,
     }
 
-    bos_id = resolve_bos_id(tokenizer)
-    meta["bos_token_id"] = bos_id
     writers = {
         "train": _BinWriter(out_dir, "train", bos_id),
         "val": _BinWriter(out_dir, "val", bos_id),
