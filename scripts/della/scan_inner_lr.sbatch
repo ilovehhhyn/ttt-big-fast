@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --account=arora --job-name=scanlr -N1 --ntasks=1 -c8 --mem=160G --gres=gpu:1
-#SBATCH --time=03:00:00
+#SBATCH --time=00:55:00
 #SBATCH --output=/scratch/gpfs/ARORA/hh9077/logs/%x-%j.out
 # Arm B (TTT-naive: inner loop on, nothing meta-learned) across inner step sizes.
 # The reference point is e2e's own rule: clip_by_global_norm(1)+sgd(1) gives a
@@ -12,7 +12,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True TOKENIZERS_PARALLELISM=f
 cd "$ROOT"
 nvidia-smi --query-gpu=name --format=csv,noheader
 COMMON="--arm B --mode eval --data /scratch/gpfs/ARORA/hh9077/data/dclm8k --fast-blocks 4 --remat-group 1 --remat-blocks --eval-sequences 32"
-for lr in 0 7e-6 2e-5 7e-5 2e-4 7e-4; do
+for lr in 0 2e-5 7e-5 2e-4; do
   echo "########## inner_lr_rms=$lr ##########"
   srun --chdir="$ROOT" .venv/bin/python -m ttt.run $COMMON --inner normalized_sgd --inner-lr "$lr" \
        --out "results/B_lr${lr}.json" || true
