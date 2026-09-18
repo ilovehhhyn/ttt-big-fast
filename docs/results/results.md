@@ -122,6 +122,13 @@ rule, whose per-element step for this fast set is `1/sqrt(201326592) = 7.05e-5`.
 | 2e-5 | 0.28x | 2.6632 |
 | 7e-5 | 1.0x | 5.3181 |
 | 2e-4 | 2.8x | 12.8929 |
+| e2e's exact rule: `clip_by_global_norm(1)` + `sgd(1)` | 1.0x (global, not per-tensor) | 8.0595 |
+
+The last row is worth separating. It has the same *total* update norm as `lr_rms=7e-5`
+per-tensor (both give `||u|| = 1` when the gradient is large), but it distributes that
+budget by global norm, so tensors with large gradients absorb most of the step instead of
+every tensor moving by the same per-element RMS. On this model that concentration is worse:
+8.06 versus 5.32. Per-tensor normalization is the gentler of the two at equal total step.
 
 **Test-time training without meta-learning monotonically damages a strongly pretrained
 model.** Even at exactly the paper's effective step size, loss more than doubles. This is
