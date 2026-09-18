@@ -83,12 +83,20 @@ def main() -> None:
         if a.markdown and i == 0:
             print(sep)
 
-    base = next((r for r in rows if r["arm"] == "A"), None)
-    if base:
-        print(f"\nbaseline (arm A, no TTT) = {base['loss']:.4f}; delta is loss - baseline, negative is better")
+    # Compare only against an arm A measured on the SAME number of sequences: a
+    # different eval subset is a different dataset, so a cross-n delta is meaningless.
+    bases = {r["n"]: r for r in rows if r["arm"] == "A"}
+    if bases:
+        print("\ndeltas vs arm A on the SAME eval set (negative is better):")
         for r in rows:
-            if r["arm"] != "A":
-                print(f"  arm {r['arm']:2s} {r['file'][:30]:32s} delta = {r['loss'] - base['loss']:+.4f}")
+            if r["arm"] == "A":
+                continue
+            b = bases.get(r["n"])
+            if b is None:
+                print(f"  arm {r['arm']:2s} {r['file'][:30]:32s} n={r['n']:<4d} no arm A at this n; not comparable")
+            else:
+                print(f"  arm {r['arm']:2s} {r['file'][:30]:32s} n={r['n']:<4d} "
+                      f"{r['loss']:.4f} - {b['loss']:.4f} = {r['loss'] - b['loss']:+.4f}")
     print(f"\nxe2e restates the inner LR as a multiple of {E2E_STEP}, the per-element step "
           f"TTT-E2E's clip_by_global_norm(1)+sgd(1) produces for that fast-weight set.")
 

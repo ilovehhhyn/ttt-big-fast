@@ -163,3 +163,47 @@ convention and their HF logits parity is unaffected (correlation 1.000000).
 Arm E is a 760M model and arm A is a 1.24B model, so the gap between 3.07 and 2.49 is
 mostly capacity and pretraining budget, not method. Arm E is a reference point for what the
 published recipe produces, not a parameter-matched comparison.
+
+## Arm C - scale-reduced replication (local, SmolLM2-135M @ 2048 context)
+
+Della was unreachable (expired interactive auth), so arms A, B and C were also run at
+reduced scale on one machine. The structure is held identical to the 1B/8K experiment so
+the comparison is like-for-like in shape:
+
+| property | Della 1B run | local 135M run |
+|---|---|---|
+| chunks per sequence | 8 (8192/1024) | 8 (2048/256) |
+| window k / chunk b | 8192 / 1024 = **8** | 2048 / 256 = **8** |
+| window vs context | k = T, so SWA = full attention | k = T, same |
+| fast weights | MLPs of last 4 of 16 blocks (201M) | MLPs of last 7 of 30 blocks (18.6M) |
+| slow weights | attention LoRA r=64 + norms + inner LRs (13.7M) | same (7.4M) |
+| e2e-equivalent inner step `1/sqrt(n_fast)` | 7.05e-5 | 2.32e-4 |
+
+All three arms on the SAME 16 held-out sequences:
+
+| arm | what | loss | delta vs A |
+|---|---|---|---|
+| A | no TTT | **2.6150** | - |
+| B | TTT-naive, inner lr 7e-5 (0.30x e2e step) | 2.6389 | +0.0239 |
+| C | meta-learned LoRA, same inner lr, 24 outer steps | 2.6422 | +0.0272 |
+
+**Result: arm C is indistinguishable from arm B (+0.0033) and both are slightly worse than
+no TTT at all.** At this budget, meta-learning the slow LoRA did not make test-time training
+useful. Training loss over the 24 steps was noisy (2.906, 2.780, 2.655, 3.218, 2.975, 2.936)
+because each outer step averages only 4 sequences.
+
+The single most informative number is the learned inner learning rate. It starts at exactly
+1.000 and drifts DOWN to 0.9915 over 24 steps - the outer loop is beginning to switch the
+inner loop off, which is the rational response when TTT is harmful. It moved only 0.85%,
+so this is a direction, not a conclusion.
+
+**What this does and does not establish.** It does not test H1: 24 outer steps is 786K
+tokens against a planned 125M, so the adapter has barely moved, and arm D (all-weights slow)
+was not run, so the falsifier "C approximately equals B while D is much greater than B" is
+only half-measured. What it does establish is that the whole pipeline runs end to end and
+produces a coherent, self-consistent A/B/C comparison, and that the early direction of travel
+is toward disabling TTT rather than exploiting it.
+
+Reporting note: deltas are computed only against an arm A measured on the SAME number of
+sequences. An earlier version of `collect_results.py` compared against whichever arm A had
+the lowest loss, which silently mixed a 4-sequence baseline with 16-sequence arms.

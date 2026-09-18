@@ -114,7 +114,8 @@ def evaluate(
     assert count > 0, "evaluate() saw no sequences: the dataloader was empty"
     assert loss_sum is not None and nll_sum is not None
 
-    token_nll = (nll_sum / count).double().cpu().numpy()
+    # .cpu() BEFORE .double(): MPS has no float64, so casting on-device raises.
+    token_nll = (nll_sum / count).cpu().double().numpy()
     assert token_nll.shape == (seq_len,), f"aggregated token_nll has shape {token_nll.shape}"
     return EvalResult(
         loss=float(loss_sum / count),
