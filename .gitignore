@@ -5,3 +5,5 @@ __pycache__/
 checkpoints/
 wandb/
 *.log
+localdata/
+results_local/

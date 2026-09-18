@@ -217,3 +217,36 @@ def test_dataloader_is_deterministic_given_seed(tmp_path) -> None:
 
     assert order(7) == order(7)
     assert order(7) != order(8)
+
+
+def test_bos_id_comes_from_the_tokenizer_not_a_constant(tmp_path):
+    """Regression: the separator id must follow the tokenizer.
+
+    Hardcoding Llama-3's 128000 writes an out-of-range id into any corpus built with a
+    smaller vocabulary (e.g. SmolLM2's 49152), which the embedding lookup cannot resolve.
+    """
+    from ttt.data.prepare import BOS_TOKEN_ID, _BinWriter, resolve_bos_id
+
+    class Tok:
+        bos_token_id = 7
+        eos_token_id = 9
+
+    class TokNoBos:
+        bos_token_id = None
+        eos_token_id = 11
+
+    class TokNeither:
+        bos_token_id = None
+        eos_token_id = None
+
+    assert resolve_bos_id(Tok()) == 7
+    assert resolve_bos_id(TokNoBos()) == 11, "must fall back to eos"
+    assert resolve_bos_id(TokNeither()) == BOS_TOKEN_ID, "then to the documented default"
+
+    import numpy as np
+
+    w = _BinWriter(tmp_path, "train", bos_id=7)
+    w.add([1, 2, 3])
+    w.close()
+    arr = np.fromfile(tmp_path / "train.bin", dtype=np.uint32)
+    assert arr[0] == 7, f"writer used {arr[0]}, not the tokenizer's BOS"

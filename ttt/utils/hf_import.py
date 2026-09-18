@@ -41,8 +41,8 @@ def model_config_from_hf(hf_config: dict, *, window_size: int, chunk_size: int,
     """Build our ModelConfig from an HF config.json, asserting the fields we rely on."""
     assert hf_config["model_type"] == "llama", f"expected llama, got {hf_config['model_type']}"
     assert hf_config["hidden_act"] == "silu", "SwiGLUMLP assumes silu"
-    assert hf_config.get("attention_bias", False) is False, "we build bias-free projections"
-    assert hf_config.get("mlp_bias", False) is False
+    assert not hf_config.get("attention_bias", False), "we build bias-free projections"
+    assert not hf_config.get("mlp_bias", False), "we build bias-free projections"
 
     rs = hf_config.get("rope_scaling") or {}
     if rs:

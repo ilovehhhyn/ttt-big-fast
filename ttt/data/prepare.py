@@ -49,7 +49,21 @@ import numpy as np
 
 # Llama-3 special tokens. Hard-coded because the whole pipeline is Llama-3 only
 # and the ids must match what the model's embedding table expects.
-BOS_TOKEN_ID = 128000  # <|begin_of_text|>
+BOS_TOKEN_ID = 128000  # Llama-3 <|begin_of_text|>; DEFAULT ONLY.
+# The document separator must come from the tokenizer actually in use. Hardcoding the
+# Llama-3 id writes token 128000 into, say, a SmolLM2 stream whose vocab is 49152, i.e.
+# an out-of-range id that the embedding lookup cannot resolve. `resolve_bos_id` below is
+# the single source of truth; BOS_TOKEN_ID remains as the fallback for tokenizers that
+# declare no BOS.
+
+
+def resolve_bos_id(tokenizer) -> int:
+    """BOS id for `tokenizer`, falling back to eos, then to the Llama-3 default."""
+    for attr in ("bos_token_id", "eos_token_id"):
+        tid = getattr(tokenizer, attr, None)
+        if tid is not None:
+            return int(tid)
+    return BOS_TOKEN_ID
 EOS_TOKEN_ID = 128001  # <|end_of_text|>
 
 TOKEN_DTYPE = np.uint32  # vocab is 128256 ids; uint32 halves the bytes of int64
@@ -96,10 +110,11 @@ class _BinWriter:
     that owns the whole iteration.
     """
 
-    def __init__(self, out_dir: Path, split: str) -> None:
+    def __init__(self, out_dir: Path, split: str, bos_id: int = BOS_TOKEN_ID) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         self.out_dir = out_dir
         self.split = split
+        self.bos_id = int(bos_id)
         self.path = out_dir / f"{split}.bin"
         # "wb": a prepare run always produces the file from scratch, so a
         # re-run after a crash cannot silently append to a half-written corpus.
@@ -110,7 +125,7 @@ class _BinWriter:
     def add(self, tokens: list[int]) -> int:
         """Write ``[BOS] + tokens``; return how many tokens that added."""
         arr = np.empty(len(tokens) + 1, dtype=TOKEN_DTYPE)
-        arr[0] = BOS_TOKEN_ID
+        arr[0] = self.bos_id
         arr[1:] = np.asarray(tokens, dtype=TOKEN_DTYPE)
         arr.tofile(self._fh)
         self.num_tokens += arr.size
@@ -137,7 +152,7 @@ def write_meta(out_dir: Path, split: str, meta: dict, *, num_tokens: int, num_do
     full = {
         "dtype": np.dtype(TOKEN_DTYPE).name,
         "num_tokens": int(num_tokens),
-        "bos_token_id": BOS_TOKEN_ID,
+        "bos_token_id": int(meta.get("bos_token_id", BOS_TOKEN_ID)),
         "eos_token_id": EOS_TOKEN_ID,
         "tokenizer": meta.get("tokenizer"),
         "min_doc_tokens": meta.get("min_doc_tokens"),
@@ -287,9 +302,11 @@ def prepare(spec: PrepareSpec, *, progress: bool = True) -> dict:
         "val_every": spec.val_every,
     }
 
+    bos_id = resolve_bos_id(tokenizer)
+    meta["bos_token_id"] = bos_id
     writers = {
-        "train": _BinWriter(out_dir, "train"),
-        "val": _BinWriter(out_dir, "val"),
+        "train": _BinWriter(out_dir, "train", bos_id),
+        "val": _BinWriter(out_dir, "val", bos_id),
     }
     started = time.time()
     last_log = 0
