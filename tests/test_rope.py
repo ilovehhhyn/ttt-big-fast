@@ -102,3 +102,45 @@ def test_rope_cache_dtype_cast():
     cfg = RopeConfig(theta=THETA, scaling="none")
     cos, sin = build_rope_cache(HEAD_DIM, 16, cfg, dtype=torch.bfloat16)
     assert cos.dtype is torch.bfloat16 and sin.dtype is torch.bfloat16
+
+
+def test_interleaved_matches_e2e_complex_form():
+    """TTT-E2E applies RoPE as a complex multiply over ADJACENT channel pairs:
+
+        x.reshape(..., -1, 2) -> complex(x[...,0], x[...,1]) * (cos + i sin)
+
+    Reproduce that with complex arithmetic and check our interleaved path equals it.
+    """
+    import torch
+
+    from ttt.model.rope import apply_rope
+
+    torch.manual_seed(0)
+    b, t, h, d = 2, 5, 3, 8
+    x = torch.randn(b, t, h, d, dtype=torch.float64)
+    cos = torch.randn(t, d // 2, dtype=torch.float64)
+    sin = torch.randn(t, d // 2, dtype=torch.float64)
+
+    pairs = x.reshape(b, t, h, d // 2, 2)
+    z = torch.complex(pairs[..., 0], pairs[..., 1])
+    w = torch.complex(cos, sin).view(1, t, 1, d // 2)
+    zo = z * w
+    ref = torch.stack([zo.real, zo.imag], dim=-1).reshape(b, t, h, d)
+
+    got = apply_rope(x, cos, sin, interleaved=True)
+    assert torch.allclose(got, ref, atol=1e-12), (got - ref).abs().max()
+
+
+def test_conventions_differ():
+    """The two conventions must NOT coincide, otherwise the arm E fix is a no-op."""
+    import torch
+
+    from ttt.model.rope import apply_rope
+
+    torch.manual_seed(0)
+    x = torch.randn(1, 4, 2, 8, dtype=torch.float64)
+    cos = torch.rand(4, 4, dtype=torch.float64)
+    sin = torch.rand(4, 4, dtype=torch.float64)
+    a = apply_rope(x, cos, sin, interleaved=False)
+    b = apply_rope(x, cos, sin, interleaved=True)
+    assert not torch.allclose(a, b, atol=1e-6)

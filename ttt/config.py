@@ -27,6 +27,8 @@ class RopeConfig:
     low_freq_factor: float = 1.0
     high_freq_factor: float = 4.0
     original_max_position: int = 8192
+    # False = Llama/HF halves convention; True = TTT-E2E adjacent-pair (complex) form.
+    interleaved: bool = False
 
     def __post_init__(self) -> None:
         if self.scaling == "llama3":

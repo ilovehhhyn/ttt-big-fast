@@ -112,6 +112,7 @@ class SlidingWindowAttention(nn.Module):
         # training more stable for TTT-E2E"). Applied per head, over head_dim,
         # BEFORE RoPE. Llama-3.2 does not use it, so it is off by default.
         self.qk_norm = cfg.qk_norm
+        self.rope_interleaved = cfg.rope.interleaved
         if cfg.qk_norm:
             self.q_norm = nn.RMSNorm(cfg.head_dim, eps=cfg.rms_norm_eps)
             self.k_norm = nn.RMSNorm(cfg.head_dim, eps=cfg.rms_norm_eps)
@@ -157,8 +158,8 @@ class SlidingWindowAttention(nn.Module):
             k = self.k_norm(k)
 
         # RoPE is applied before caching, so cached keys already carry their absolute phase.
-        q = apply_rope(q, cos, sin)
-        k = apply_rope(k, cos, sin)
+        q = apply_rope(q, cos, sin, interleaved=self.rope_interleaved)
+        k = apply_rope(k, cos, sin, interleaved=self.rope_interleaved)
 
         if cache is None:
             positions = torch.arange(t, device=x.device)

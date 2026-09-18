@@ -134,7 +134,7 @@ def e2e_760m_config(**overrides) -> ModelConfig:
         tie_word_embeddings=True, rms_norm_eps=1e-6,
         qk_norm=True, post_norm=True, prime=True,
         fast_blocks=6, window_size=8192, chunk_size=1024,
-        rope=RopeConfig(theta=500000.0, scaling="none"),
+        rope=RopeConfig(theta=500000.0, scaling="none", interleaved=True),
         lora=LoRAConfig(rank=0),
     )
     known = {f.name for f in fields(ModelConfig)}

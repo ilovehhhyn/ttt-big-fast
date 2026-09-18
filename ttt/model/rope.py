@@ -74,15 +74,24 @@ def _llama3_rescale(inv_freq: Tensor, cfg: RopeConfig) -> Tensor:
     return torch.where(is_medium, blended, scaled)
 
 
-def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
+def apply_rope(x: Tensor, cos: Tensor, sin: Tensor, *, interleaved: bool = False) -> Tensor:
     """Rotate `x` by the angles in (cos, sin).
 
     x:       [B, T, H, D]
     cos/sin: [T, D//2], already gathered for this chunk's absolute positions.
 
-    Halves convention (Llama / HuggingFace):
+    Two conventions, differing in WHICH pairs of channels form each 2-D rotation.
+    They are not interchangeable: a model trained under one scores badly under the other.
+
+    interleaved=False - halves (Llama / HuggingFace `rotate_half`):
         x1 = x[..., :D//2], x2 = x[..., D//2:]
         out = cat(x1 * cos - x2 * sin,  x2 * cos + x1 * sin)
+
+    interleaved=True - adjacent pairs (TTT-E2E, and the classic GPT-J form). Their
+    `apply_rotary_emb` does `x.reshape(..., -1, 2)` and treats the two entries as the
+    real and imaginary parts of a complex number, i.e. channels (0,1), (2,3), ... pair up:
+        out[..., 0::2] = x[..., 0::2] * cos - x[..., 1::2] * sin
+        out[..., 1::2] = x[..., 1::2] * cos + x[..., 0::2] * sin
     """
     assert x.ndim == 4, f"apply_rope expects [B, T, H, D], got {tuple(x.shape)}"
     b, t, h, d = x.shape
@@ -93,7 +102,12 @@ def apply_rope(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
 
     cos_b = cos.to(x.dtype).view(1, t, 1, half)
     sin_b = sin.to(x.dtype).view(1, t, 1, half)
-    x1, x2 = x[..., :half], x[..., half:]
-    out = torch.cat([x1 * cos_b - x2 * sin_b, x2 * cos_b + x1 * sin_b], dim=-1)
+    if interleaved:
+        x_even, x_odd = x[..., 0::2], x[..., 1::2]
+        out = torch.stack([x_even * cos_b - x_odd * sin_b,
+                           x_odd * cos_b + x_even * sin_b], dim=-1).flatten(-2)
+    else:
+        x1, x2 = x[..., :half], x[..., half:]
+        out = torch.cat([x1 * cos_b - x2 * sin_b, x2 * cos_b + x1 * sin_b], dim=-1)
     assert out.shape == (b, t, h, d)
     return out
