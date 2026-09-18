@@ -109,3 +109,33 @@ Base-model candidates (all full-attention pretrained; at 8K, SWA k=8K is identic
 | HuggingFaceTB/SmolLM2-135M | 30 / 576 / 1536 | 80M (59%) | 20M | own | needs re-tokenization |
 | Qwen/Qwen2.5-0.5B | 24 / 896 / 4864 | 314M (64%) | 78M | own | needs re-tokenization |
 Recommendation: Llama-3.2-1B (tokenizer match removes a whole data-pipeline step). fp32 carry at 32K with n=6 (≈11.3 copies): 1/4 → 9 GB (SGD) / 27 GB (AdamW); all → 36 GB / 109 GB → all-blocks AdamW needs host offload or `n_state_parallel`.
+
+## 11. Implementation status (2026-09-18)
+
+Code: `ttt/` (PyTorch), 140 tests. Results: `docs/results/results.md`. Plan and its
+corrections: `docs/superpowers/plans/2026-09-18-pytorch-architecture.md`.
+
+Correctness gates passed:
+- Llama-3.2-1B logits reproduced against HuggingFace through our chunked prefix+suffix
+  path (correlation 1.000000).
+- Inner loop with lr=0 reproduces the plain no-TTT gradient exactly.
+- Checkpoint group size is numerically inert; gradients flow through the KV cache across
+  chunk boundaries (verified by a detach-and-compare test).
+
+Three things the plan got wrong, each found by running rather than reading:
+1. **Inner LR off by 14x.** Derived from the paper's 11.5M-param prime MLP instead of our
+   201M fast set. The paper-equivalent per-element step is `1/sqrt(n_fast)`, so the scale
+   is not transferable between fast-weight sets of different sizes.
+2. **Memory model incomplete.** It counted fast-weight copies only. The binding cost is
+   the attention double-backward, which the math SDPA backend forces; backward grows about
+   12 GiB per fast block while forward grows under 2 GiB.
+3. **RoPE convention.** TTT-E2E uses the interleaved complex form, HuggingFace Llama the
+   halves form. Worth 2.0 nats on arm E.
+
+Deviations from the plan, all forced and all recorded:
+- 199.6M training tokens instead of 2e9: Della compute nodes have no internet and the
+  login-node watchdog kills long streaming jobs.
+- Arm C trains at 131,072 tokens per outer step rather than 524,288, because a step costs
+  about 127 s at 16 sequences; the planned batch would make a 300-step run take 11 hours
+  of pure compute per configuration.
+- The fast-weight-fraction ablation stops at 1/4. Half and all-blocks do not fit in 80 GiB.
