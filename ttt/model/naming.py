@@ -35,6 +35,7 @@ from ttt.config import ModelConfig, TrainConfig
 
 __all__ = [
     "FAST_SUFFIXES",
+    "fast_suffixes",
     "ParamSplit",
     "is_fast_param",
     "is_slow_param",
@@ -49,6 +50,18 @@ FAST_SUFFIXES: tuple[str, ...] = (
     "mlp.w2.weight",
     "mlp.w3.weight",
 )
+
+
+def fast_suffixes(cfg: ModelConfig) -> tuple[str, ...]:
+    """Suffixes for THIS config's fast module.
+
+    With cfg.prime the fast weight is the inserted ``mlp_prime``; the block's own
+    ``mlp`` stays static as safe storage, so it must NOT be selected. Note that
+    "blocks.i.mlp_prime.w1.weight" does not end with "mlp.w1.weight", so the two
+    cases are disjoint and there is no accidental cross-match.
+    """
+    mod = cfg.fast_module
+    return tuple(f"{mod}.{w}.weight" for w in ("w1", "w2", "w3"))
 
 _BLOCK_RE = re.compile(r"^blocks\.(\d+)\.")
 
@@ -77,7 +90,7 @@ def is_fast_param(name: str, cfg: ModelConfig) -> bool:
         )
     if index < cfg.first_fast_layer:
         return False
-    return name.endswith(FAST_SUFFIXES)
+    return name.endswith(fast_suffixes(cfg))
 
 
 def is_slow_param(name: str, train_cfg: TrainConfig) -> bool:

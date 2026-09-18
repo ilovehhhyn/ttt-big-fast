@@ -108,6 +108,13 @@ class SlidingWindowAttention(nn.Module):
         self.wk = make_projection("wk", cfg.hidden_size, kv_dim, cfg.lora)
         self.wv = make_projection("wv", cfg.hidden_size, kv_dim, cfg.lora)
         self.wo = make_projection("wo", q_dim, cfg.hidden_size, cfg.lora)
+        # QK-norm (TTT-E2E appendix C: "normalizing the queries and keys ... makes
+        # training more stable for TTT-E2E"). Applied per head, over head_dim,
+        # BEFORE RoPE. Llama-3.2 does not use it, so it is off by default.
+        self.qk_norm = cfg.qk_norm
+        if cfg.qk_norm:
+            self.q_norm = nn.RMSNorm(cfg.head_dim, eps=cfg.rms_norm_eps)
+            self.k_norm = nn.RMSNorm(cfg.head_dim, eps=cfg.rms_norm_eps)
 
     # ------------------------------------------------------------------ helpers
 
@@ -145,6 +152,9 @@ class SlidingWindowAttention(nn.Module):
         q = self.wq(x).view(b, t, self.num_heads, d)
         k = self.wk(x).view(b, t, self.num_kv_heads, d)
         v = self.wv(x).view(b, t, self.num_kv_heads, d)
+        if self.qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
 
         # RoPE is applied before caching, so cached keys already carry their absolute phase.
         q = apply_rope(q, cos, sin)

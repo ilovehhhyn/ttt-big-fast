@@ -40,7 +40,8 @@ class TTTTransformer(nn.Module):
         # Blocks below first_fast_layer never see a fast weight -> fused attention.
         self.blocks = nn.ModuleList(
             [
-                TransformerBlock(cfg, use_math_backend=(i >= cfg.first_fast_layer))
+                TransformerBlock(cfg, use_math_backend=(i >= cfg.first_fast_layer),
+                                 is_fast_block=(i >= cfg.first_fast_layer))
                 for i in range(cfg.num_layers)
             ]
         )
@@ -74,8 +75,9 @@ class TTTTransformer(nn.Module):
 
         Must agree with ttt.model.naming.is_fast_param; tested in test_trainer.py.
         """
+        mod = self.cfg.fast_module  # "mlp" or "mlp_prime"
         return [
-            f"blocks.{i}.mlp.{w}.weight"
+            f"blocks.{i}.{mod}.{w}.weight"
             for i in range(self.cfg.first_fast_layer, self.cfg.num_layers)
             for w in ("w1", "w2", "w3")
         ]

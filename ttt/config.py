@@ -75,6 +75,10 @@ class ModelConfig:
     window_size: int = 8192
     chunk_size: int = 1024
     fast_blocks: int = 4  # number of trailing blocks whose MLPs are fast weights
+    # --- TTT-E2E (arm E) architecture options. Llama-3.2 uses none of these. ---
+    qk_norm: bool = False  # RMSNorm on q and k per head before RoPE
+    post_norm: bool = False  # extra RMSNorm on each sublayer output (pre+post norm)
+    prime: bool = False  # see `fast_module`
     rope: RopeConfig = field(default_factory=RopeConfig)
     lora: LoRAConfig = field(default_factory=LoRAConfig)
 
@@ -85,6 +89,18 @@ class ModelConfig:
         # k >= b: the window must cover a whole chunk so the model can see
         # within-chunk context before TTT updates the weights (paper 2.3).
         assert self.window_size >= self.chunk_size, "window_size must be >= chunk_size"
+
+    @property
+    def fast_module(self) -> str:
+        """Which MLP the inner loop updates.
+
+        prime=False (arms A-D): the block's own MLP is the fast weight.
+        prime=True  (arm E/F):  a SECOND "prime" MLP is inserted in each suffix block
+                                and is the fast weight, while the original MLP stays
+                                static as "safe storage" for pretrained knowledge
+                                (TTT-E2E 2.3.1, `feed_forward_prime` in their code).
+        """
+        return "mlp_prime" if self.prime else "mlp"
 
     @property
     def head_dim(self) -> int:
