@@ -184,8 +184,14 @@ def main() -> None:
                 print(f"[train] {m.as_log()}", flush=True)
         result["history"] = history
 
+    # Shuffle the validation set with a FIXED seed. Deterministic, but it spreads the
+    # evaluated sequences across documents instead of walking the first one. Without
+    # this, PG-19's val split begins with the King James Bible, which is long enough
+    # that 16 sequences of 32768 never leave it - and which the base model has
+    # memorised (0.19 nats, 1039 distinct tokens over 7K positions), so the whole
+    # evaluation would sit on text that is trivially predictable for every arm.
     val_loader = build_dataloader(Path(args.data), "val", args.seq_len, 1,
-                                  shuffle=False, seed=args.seed, num_workers=2)
+                                  shuffle=True, seed=args.seed, num_workers=2)
     t0 = time.perf_counter()
     ev = evaluate(loop, split, val_loader, max_sequences=args.eval_sequences, device=device)
     result["eval"] = {"loss": ev.loss, "num_sequences": ev.num_sequences,
