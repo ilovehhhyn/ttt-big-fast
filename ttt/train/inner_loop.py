@@ -39,7 +39,6 @@ from __future__ import annotations
 from typing import Callable
 
 from dataclasses import dataclass
-from math import sqrt
 
 import torch
 from torch import Tensor
@@ -106,18 +105,21 @@ class SequenceOutput:
 def resolve_remat_group(num_chunks: int, remat_group: int) -> int:
     """Group size g for checkpointing through time.
 
-    Peak fast-weight storage is (N/g + g) copies, minimised at g = sqrt(N). But g must
-    DIVIDE N: a ragged final group would silently change the recompute pattern, and
-    (worse) make the saved-tensor count differ between forward and recompute. So with
-    remat_group=0 we take the divisor of N nearest sqrt(N), breaking ties toward the
-    SMALLER divisor -- under double backward a group is re-executed 2-3.5x and the
-    per-chunk recompute cost grows with g, so the smaller side is the cheaper error.
+    MEASURED: g=1 is optimal, and g>1 is strictly worse. The (N/g + g) model behind
+    g=sqrt(N) assumes a checkpointed group's interior can be discarded, but this loop
+    builds its inner gradient with create_graph=True, and torch.utils.checkpoint does
+    NOT discard a graph created inside the region. A larger group therefore holds more
+    second-order graph live at once: at 16K, g=1 peaks at 42.6 GiB in the forward while
+    g=4 OOMs before the forward even finishes. Peak memory is linear in N whatever g is;
+    `truncate_bptt` is the lever that actually bounds it (see FINDINGS section 13).
+
+    g must still DIVIDE N: a ragged final group would silently change the recompute
+    pattern and make the saved-tensor count differ between forward and recompute.
+    remat_group=0 therefore resolves to 1.
     """
     assert num_chunks >= 1
     if remat_group == 0:
-        target = sqrt(num_chunks)
-        divisors = [d for d in range(1, num_chunks + 1) if num_chunks % d == 0]
-        g = min(divisors, key=lambda d: (abs(d - target), d))
+        g = 1
     else:
         g = max(1, min(remat_group, num_chunks))
     assert num_chunks % g == 0, (

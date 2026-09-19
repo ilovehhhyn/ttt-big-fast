@@ -194,3 +194,64 @@ and 32K, with only the chunk count growing. Truncated BPTT (`truncate_bptt`) bou
 meta-gradient window and is implemented and tested, but is a BIASED estimator: contributions
 from inner steps older than the window are dropped, as in PERK. Arm C is running at 16K,
 where the window still binds (T/k = 2) and training fits.
+
+## 13. Why arm C really OOMed, and the two fixes (2026-09-19)
+
+The paragraph above was written from a memory probe that was itself wrong, and two of its
+conclusions do not survive measurement. Recording the correction in full, because both
+errors are easy to repeat.
+
+**Probe artifact.** The probe ran a grad-enabled, unwrapped `prefix_forward` as a staged
+measurement before the full-sequence run. That call retains its graph (~28 GiB at 16K), and
+every later number in the same process sat on top of it. It inflated the full-sequence
+forward from 42.6 to 70.6 GiB and made the prefix look like the dominant cost. Measured
+first, on a clean allocator, the CHECKPOINTED prefix costs `resident=4.82 GiB` at 16K -
+model 4.66 plus a 0.13 output. The prefix was never the problem. Any staged diagnostic that
+builds a graph must be measured last, or in its own process.
+
+**Per-chunk growth, correctly attributed.** With `on_group` tracing, forward memory at 16K
+grows exactly 2.14 GiB per chunk while the carry is only 0.81 GiB. So 1.33 GiB/chunk is
+retained fast-block activation - consistent with the 1.12 GiB `[1, 32, 1024, 9216]` fp32
+score matrix the math SDPA backend materialises, which the second-order path forces.
+
+**`remat_group` > 1 makes things WORSE, contradicting the sqrt(N) analysis.** At 16K,
+g=1 reaches a 42.6 GiB forward peak; g=4 OOMs before finishing the forward. The (N/g + g)
+model assumes a checkpointed group's interior can be discarded. It cannot: the group builds
+its inner gradient with `create_graph=True`, and `torch.utils.checkpoint` does not discard a
+graph created inside the region. A larger group therefore holds more second-order graph live
+at once. **g=1 is optimal for this loop**, and peak memory is linear in N regardless of g.
+
+**Fix 1 - truncated BPTT was a no-op for memory.** The implementation detached the carry at
+each window boundary, which is necessary but not sufficient: every chunk loss was appended
+to `chunk_losses` and fed the final mean, so the entire second-order chain stayed reachable
+until the outer backward and nothing was ever freed. This is why earlier truncation sweeps
+at windows 8, 4 and 2 changed nothing. The loop now differentiates each window as soon as it
+closes (`backward_scale`), then drops its losses so the graph can be collected. Gradients are
+unchanged - summing the backwards of disjoint window losses equals one backward of their sum,
+pinned by `test_per_window_backward_matches_single_backward`. At 16K resident memory goes
+from 7.1 -> 39.2 GiB (linear) to FLAT at 8.73 GiB.
+
+**Fix 2 - the prefix backward was O(T).** Segmenting the prefix with a rolling KV cache
+bounds the FORWARD to one segment, but backprop needs every segment's activations
+simultaneously, so the prefix still cost O(T). Once fix 1 removed the chunk-loop growth this
+became the binding constraint and 32K OOMed at the very first window even at
+`truncate_bptt=1`. Each segment is now checkpointed individually, so the backward
+rematerialises one segment at a time.
+
+**Result.** 32K arm C fits on a single 80 GiB card:
+
+| context | truncate_bptt | resident across sequence | peak | outcome |
+|---|---|---|---|---|
+| 16K | 0 (exact) | 7.11 -> 39.20 GiB | 77.45 | OOM in backward |
+| 16K | 2 | flat 8.73 GiB | 55.39 | completes |
+| 32K | 2 | flat 8.86 GiB | 49.57 | completes |
+| 32K | 4 | - | 77.45 | OOM |
+
+Resident memory is now O(window), not O(sequence). What remains is a transient spike during
+each window's double backward, roughly independent of sequence length - which is why 32K at
+`trunc=2` (49.6 GiB) is cheaper than 16K at `trunc=2` (55.4 GiB) but `trunc=4` still dies.
+
+**Cost.** The meta-gradient spans at most 2 inner steps rather than 32, so arm C at 32K
+optimises a biased objective (PERK, arXiv:2507.06415, accepts the same bias). Arms A and B
+are unaffected: they need no meta-gradient, and evaluation is forward-only, so eval numbers
+remain directly comparable across arms.
