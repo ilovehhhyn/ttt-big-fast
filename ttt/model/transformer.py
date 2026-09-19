@@ -24,6 +24,7 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint
 from torch import Tensor
+from torch.utils.checkpoint import checkpoint
 
 from ttt.config import ModelConfig
 from ttt.model.attention import KVCache
@@ -157,7 +158,10 @@ class TTTTransformer(nn.Module):
         whole sequence at once costs O(T). Measured at 32K with 12 prefix blocks that is
         72 GiB, which alone exhausts an 80 GiB card before the TTT loop even starts.
 
-        Processing the prefix in segments with a rolling KV cache bounds it to one
+        Processing the prefix in segments with a rolling KV cache bounds the FORWARD to
+        one segment; each segment is additionally checkpointed so the BACKWARD is bounded
+        the same way (without that, backprop holds every segment at once and 32K dies).
+        Segmenting bounds it to one
         segment's activations. This is exact, not an approximation: sliding-window
         attention only ever looks back `window_size` tokens, and the cache carries
         exactly that history, so segmented and one-shot outputs agree (asserted by
@@ -186,13 +190,27 @@ class TTTTransformer(nn.Module):
                           device=h.device, dtype=h.dtype)
             for _ in range(n_pre)
         ]
+
+        def run_segment(x, cos, sin, *flat):
+            """One segment through all prefix blocks. Flat layout: (k, v, length) per block."""
+            cs = [KVCache(flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]) for i in range(n_pre)]
+            for i in range(n_pre):
+                x, cs[i] = self.blocks[i](x, cos, sin, cs[i])
+            return (x, *[t for c in cs for t in (c.k, c.v, c.length)])
+
         outs = []
         for s in range(0, t, segment):
             x = h[:, s : s + segment]
             cos, sin = self._rope_slice(s, segment)
-            for i in range(n_pre):
-                x, caches[i] = self.blocks[i](x, cos, sin, caches[i])
-            outs.append(x)
+            flat = tuple(t_ for c in caches for t_ in (c.k, c.v, c.length))
+            # Checkpoint EACH segment, not just the prefix as a whole. Segmenting alone
+            # bounds only the forward: the backward needs every segment's activations at
+            # once, which is O(T) and is what exhausts the card at 32K. Checkpointing per
+            # segment makes the backward recompute one segment at a time, so the prefix
+            # costs O(segment) in both directions.
+            res = checkpoint(run_segment, x, cos, sin, *flat, use_reentrant=False)
+            outs.append(res[0])
+            caches = [KVCache(res[1 + 3 * i], res[2 + 3 * i], res[3 + 3 * i]) for i in range(n_pre)]
         return torch.cat(outs, dim=1)
 
     def suffix_forward(
