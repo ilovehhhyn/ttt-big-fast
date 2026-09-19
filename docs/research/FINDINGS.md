@@ -139,3 +139,58 @@ Deviations from the plan, all forced and all recorded:
   about 127 s at 16 sequences; the planned batch would make a 300-step run take 11 hours
   of pure compute per configuration.
 - The fast-weight-fraction ablation stops at 1/4. Half and all-blocks do not fit in 80 GiB.
+
+## 12. The result, and what made it work (2026-09-19)
+
+**Test-time training with big fast weights improves held-out loss, once evaluated where
+the sliding window actually binds.**
+
+Llama-3.2-1B, PG-19, 32768 context, window 8192, 32 held-out sequences spread across books:
+
+| arm | inner LR | loss | delta |
+|---|---|---|---|
+| A (no TTT) | - | 3.7119 | - |
+| B (TTT, no meta-learning) | 4e-6 | **3.5694** | **-0.1424** |
+
+The same model at 8K with window 8192 goes the other way (+0.169). The difference is not
+the method, it is the regime: at 8K the window equals the context, so sliding-window
+attention IS full attention and there is nothing for a compressed memory to recover. The
+paper says this outright ("SWA with k = 8K is exactly full attention"), which is why their
+headline results come from extension fine-tuning at 32K-128K on Books.
+
+### Where the gain comes from
+
+| token range | arm A loss | delta with TTT |
+|---|---|---|
+| 0 - 8K (inside the window) | 2.27 - 2.53 | +0.000 to +0.002 |
+| 8K - 16K | 4.21 | **-0.113** |
+| 16K - 32K | 4.16 | **-0.229** |
+
+Nothing changes inside the window; the entire benefit appears past it and grows with
+distance. This is the OPPOSITE of the paper's Fig. 6, where the advantage is concentrated
+in early tokens. The explanation is that their W0 is meta-learned from scratch, so their
+initialisation is better everywhere, whereas ours is a frozen pretrained Llama and the only
+thing TTT adds is the memory mechanism. Our curve isolates that mechanism.
+
+### Four things that had to be fixed to get here
+
+1. **Inner LR scale.** The planned value was 14x too large because it was derived from the
+   paper's 11.5M-parameter prime MLP rather than our 201M fast set. The transferable form is
+   a multiple of 1/sqrt(n_fast); the optimum here is 0.057x.
+2. **Regime.** See above. This was the difference between a negative and a positive result.
+3. **Evaluation contamination.** PG-19's val split opens with the King James Bible, which the
+   base model has memorised (0.19 nats, 1039 distinct tokens over 7K positions) and which is
+   long enough that every 32K sequence stayed inside it. Deterministic shuffling fixed it;
+   the result survived.
+4. **Prefix memory.** Run in one shot the frozen prefix holds 72 GiB at 32K. It is now
+   segmented with a rolling KV cache, which is exact rather than approximate.
+
+### Open at time of writing
+
+Arm C (meta-learned slow set) does not fit at 32K: evaluation costs 36.7 GiB and the outer
+backward roughly doubles it. Halving the fast blocks did not help, which rules them out as
+the driver - the binding cost is the attention double-backward per chunk, identical at 8K
+and 32K, with only the chunk count growing. Truncated BPTT (`truncate_bptt`) bounds the
+meta-gradient window and is implemented and tested, but is a BIASED estimator: contributions
+from inner steps older than the window are dropped, as in PERK. Arm C is running at 16K,
+where the window still binds (T/k = 2) and training fits.
