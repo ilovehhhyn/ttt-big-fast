@@ -139,7 +139,8 @@ def main() -> None:
     p.add_argument("--empty-cache", action="store_true",
                    help="release cached GPU blocks between sequences (slower, more headroom)")
     p.add_argument("--truncate-bptt", type=int, default=0,
-                   help="detach the carry every K chunks; meta-gradient spans <=K inner steps (0=exact)")
+                   help="differentiate every K chunks and release that window; meta-gradient spans "
+                        "<=K inner steps, so it is BIASED but memory becomes O(K) not O(N) (0=exact)")
     p.add_argument("--prefix-segment", type=int, default=0,
                    help="segment the frozen prefix (0 = one shot); must divide seq_len and be <= window")
     p.add_argument("--remat-blocks", action="store_true",
