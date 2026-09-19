@@ -171,6 +171,13 @@ class TrainConfig:
     # is cheapest at short T; at 32K the one-shot prefix costs 72 GiB on its own, so it
     # must be segmented. Must divide seq_len and be <= window_size.
     prefix_segment: int = 0
+    # Truncated backprop through time: detach the carry every `truncate_bptt` chunks so
+    # the meta-gradient spans at most that many inner steps. 0 = no truncation (exact).
+    # This makes peak memory O(truncate_bptt) instead of O(num_chunks), which is what
+    # makes 32 chunks fit at all. The meta-gradient becomes BIASED: contributions from
+    # inner steps further back than the window are dropped. PERK (arXiv:2507.06415) does
+    # the same, unrolling only the last 1-2 of its 4 inner steps.
+    truncate_bptt: int = 0
     slow_spec: tuple[str, ...] = ("lora_A", "lora_B", "norm.weight", "inner_lr_log")
     seed: int = 0
     dtype: Literal["bf16", "fp32"] = "bf16"

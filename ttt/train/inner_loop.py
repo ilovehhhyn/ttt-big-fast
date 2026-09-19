@@ -297,11 +297,24 @@ class TTTInnerLoop:
                     torch.stack(losses), torch.cat(nlls, dim=-1))
 
         flat = (*[fast[k] for k in keys], *state_tensors, *self.model.flatten_caches(caches))
+        trunc = self.cfg.train.truncate_bptt
         for start in range(0, self.num_chunks, self.group):
             out = checkpoint(run_group, start, *flat, use_reentrant=False)
             flat = out[: len(keys) + n_state_t + n_cache_t]
             chunk_losses.append(out[-2])
             token_nlls.append(out[-1])
+            # Cut the gradient path at the window boundary. The VALUES carry forward
+            # unchanged, so the forward computation and the reported loss are identical;
+            # only the backward stops here, which is what bounds memory.
+            if trunc and (start + self.group) % trunc == 0 and (start + self.group) < self.num_chunks:
+                # Detach from history, but the fast weights must stay differentiable:
+                # the NEXT window's inner loop still takes d loss / d W w.r.t. them.
+                # Only their link to earlier inner steps is cut.
+                n_fast = len(keys)
+                flat = tuple(
+                    x.detach().requires_grad_(True) if i < n_fast else x.detach()
+                    for i, x in enumerate(flat)
+                )
 
         fast_final = dict(zip(keys, flat[: len(keys)], strict=True))
         per_chunk = torch.cat(chunk_losses)

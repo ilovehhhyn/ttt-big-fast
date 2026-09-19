@@ -86,6 +86,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
                         prefix_segment=args.prefix_segment,
+                        truncate_bptt=args.truncate_bptt,
                         slow_spec=arm["slow"] or ("__none__",), dtype=args.dtype)
     cfg = Config(model=model.cfg, inner=inner, outer=outer, train=train)
     split = split_parameters(model, model.cfg, cfg.train)
@@ -114,6 +115,7 @@ def _build_arm_e(args, arm, device):
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
                         prefix_segment=args.prefix_segment,
+                        truncate_bptt=args.truncate_bptt,
                         slow_spec=("__none__",), dtype=args.dtype)
     cfg = Config(model=mcfg, inner=inner, outer=OuterConfig(lr=0.0, total_steps=1), train=train)
     split = split_parameters(model, mcfg, cfg.train)
@@ -134,6 +136,8 @@ def main() -> None:
     p.add_argument("--window", type=int, default=8192)
     p.add_argument("--fast-blocks", type=int, default=4)
     p.add_argument("--remat-group", type=int, default=0)
+    p.add_argument("--truncate-bptt", type=int, default=0,
+                   help="detach the carry every K chunks; meta-gradient spans <=K inner steps (0=exact)")
     p.add_argument("--prefix-segment", type=int, default=0,
                    help="segment the frozen prefix (0 = one shot); must divide seq_len and be <= window")
     p.add_argument("--remat-blocks", action="store_true",

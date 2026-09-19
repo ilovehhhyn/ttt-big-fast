@@ -175,3 +175,38 @@ def test_gradient_flows_through_the_kv_cache_across_chunks():
         "detaching the KV cache did not change the meta-gradient, so gradients are not "
         "flowing through the cache across chunk boundaries"
     )
+
+
+def test_truncated_bptt_matches_exact_when_window_covers_everything():
+    """truncate_bptt >= num_chunks must be a no-op, and the loss must never change.
+
+    Truncation cuts only the BACKWARD path; the forward values carry through unchanged.
+    So the reported loss is identical for every truncation window, while the gradient
+    differs once the window is shorter than the sequence.
+    """
+    cfg, model, split, = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
+
+    def run(trunc):
+        c = Config(model=cfg.model, inner=cfg.inner, outer=cfg.outer,
+                   train=TrainConfig(seq_len=cfg.train.seq_len, tokens_per_step=cfg.train.tokens_per_step,
+                                     micro_batch=1, remat_group=1, truncate_bptt=trunc, dtype="fp32"))
+        loop = TTTInnerLoop(model, c, build_inner_optimizer(c.inner))
+        ids, tgt, mask = batch(c)
+        out = loop.run_sequence(ids, tgt, mask, dict(split.fast))
+        slow = [v for _, v in sorted(split.slow.items())]
+        g = torch.autograd.grad(out.loss, slow, allow_unused=True)
+        return out.loss, [torch.zeros(1, dtype=torch.float64) if x is None else x for x in g]
+
+    n = cfg.num_chunks
+    loss_exact, g_exact = run(0)
+    loss_full, g_full = run(n)          # window covers the whole sequence -> identical
+    loss_short, g_short = run(1)        # one-chunk window -> genuinely different gradient
+
+    assert torch.allclose(loss_exact, loss_full) and torch.allclose(loss_exact, loss_short), (
+        "truncation must not change the forward loss"
+    )
+    for a, b in zip(g_exact, g_full, strict=True):
+        assert torch.allclose(a, b, atol=1e-12), (a - b).abs().max()
+    assert max((a - b).abs().max().item() for a, b in zip(g_exact, g_short, strict=True)) > 1e-9, (
+        "a one-chunk truncation window must change the meta-gradient"
+    )
