@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--remat-blocks", action="store_true")
     ap.add_argument("--prefix-segment", type=int, default=0)
     ap.add_argument("--remat-group", type=int, default=0)
+    ap.add_argument("--truncate-bptt", type=int, default=0)
     ap.add_argument("--staged", action="store_true",
                     help="also run the grad-enabled staged measurements (they retain their graph)")
     a = ap.parse_args()
@@ -38,6 +39,7 @@ def main():
                  outer=OuterConfig(lr=1e-3, total_steps=10),
                  train=TrainConfig(seq_len=a.seq_len, tokens_per_step=a.seq_len,
                                    remat_group=a.remat_group, dtype=a.dtype, prefix_segment=a.prefix_segment,
+                                   truncate_bptt=a.truncate_bptt,
                                    slow_spec=("lora_A", "lora_B", "norm.weight", "inner_lr_log")))
     split = split_parameters(model, model.cfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
@@ -98,10 +100,12 @@ def main():
     torch.cuda.reset_peak_memory_stats()
     try:
         out = loop.run_sequence(ids, tgt, mask, dict(split.fast), lr_scale=1.0,
-                                lr_mult=model.inner_lr_multipliers())
+                                lr_mult=model.inner_lr_multipliers(), backward_scale=1.0)
         print(f"full sequence fwd: loss={out.loss.item():.4f} "
-              f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
-        out.loss.backward()
+              f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB "
+              f"backward_done={out.backward_done}", flush=True)
+        if not out.backward_done:
+            out.loss.backward()
         print(f"after backward:    peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
     except torch.OutOfMemoryError as e:
         print(f"OOM: {str(e)[:160]}", flush=True)
