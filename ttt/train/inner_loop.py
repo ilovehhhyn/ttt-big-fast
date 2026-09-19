@@ -96,10 +96,11 @@ _TENSOR_SLOT = object()
 class SequenceOutput:
     """Result of running TTT over one sequence."""
 
-    loss: Tensor  # scalar, differentiable: mean over chunks of loss-before-update
+    loss: Tensor  # scalar; differentiable unless backward_done (then detached)
     per_chunk_loss: Tensor  # [N], detached
     token_nll: Tensor  # [T], detached
-    fast_final: dict[str, Tensor]  # W_N, differentiable (used by the forgetting probe)
+    fast_final: dict[str, Tensor]  # W_N (used by the forgetting probe)
+    backward_done: bool = False  # True when run_sequence already accumulated .grad
 
 
 def resolve_remat_group(num_chunks: int, remat_group: int) -> int:
@@ -233,6 +234,7 @@ class TTTInnerLoop:
         *,
         lr_scale: Tensor | float = 1.0,
         lr_mult: dict[str, Tensor] | None = None,
+        backward_scale: float | None = None,
     ) -> SequenceOutput:
         b, t = input_ids.shape
         assert b == 1, f"inner loop requires micro_batch=1 (fast weights are per-sequence), got {b}"
@@ -301,10 +303,27 @@ class TTTInnerLoop:
 
         flat = (*[fast[k] for k in keys], *state_tensors, *self.model.flatten_caches(caches))
         trunc = self.cfg.train.truncate_bptt
+        # Truncation only bounds memory if the window's graph is actually RELEASED at the
+        # boundary. Detaching the carry alone does not do that: every chunk loss feeds the
+        # final mean, so the whole chain stays reachable until the outer backward. So when
+        # a backward_scale is supplied we differentiate each window as soon as it closes
+        # and drop its losses, making peak memory O(trunc) instead of O(N).
+        per_window = trunc > 0 and backward_scale is not None
+        window_losses: list[Tensor] = []
+
+        def close_window():
+            # L = (1/N) sum_i l_i, so this window contributes sum(window)/N. retain_graph
+            # is required because prefix_out is shared by every window: its (checkpointed)
+            # graph must survive to serve the windows that follow.
+            w = torch.cat(window_losses).sum() / self.num_chunks
+            (w * backward_scale).backward(retain_graph=True)
+            chunk_losses.append(torch.cat(window_losses).detach())
+            window_losses.clear()
+
         for start in range(0, self.num_chunks, self.group):
             out = checkpoint(run_group, start, *flat, use_reentrant=False)
             flat = out[: len(keys) + n_state_t + n_cache_t]
-            chunk_losses.append(out[-2])
+            (window_losses if per_window else chunk_losses).append(out[-2])
             token_nlls.append(out[-1])
             # Diagnostic only: lets a probe read the memory growth per group without
             # changing the computation. None in every real run.
@@ -313,15 +332,21 @@ class TTTInnerLoop:
             # Cut the gradient path at the window boundary. The VALUES carry forward
             # unchanged, so the forward computation and the reported loss are identical;
             # only the backward stops here, which is what bounds memory.
-            if trunc and (start + self.group) % trunc == 0 and (start + self.group) < self.num_chunks:
-                # Detach from history, but the fast weights must stay differentiable:
-                # the NEXT window's inner loop still takes d loss / d W w.r.t. them.
-                # Only their link to earlier inner steps is cut.
-                n_fast = len(keys)
-                flat = tuple(
-                    x.detach().requires_grad_(True) if i < n_fast else x.detach()
-                    for i, x in enumerate(flat)
-                )
+            if trunc and (start + self.group) % trunc == 0:
+                if per_window:
+                    close_window()
+                if (start + self.group) < self.num_chunks:
+                    # Detach from history, but the fast weights must stay differentiable:
+                    # the NEXT window's inner loop still takes d loss / d W w.r.t. them.
+                    # Only their link to earlier inner steps is cut.
+                    n_fast = len(keys)
+                    flat = tuple(
+                        x.detach().requires_grad_(True) if i < n_fast else x.detach()
+                        for i, x in enumerate(flat)
+                    )
+        if per_window and window_losses:
+            # A ragged tail (num_chunks not a multiple of trunc) still has to be charged.
+            close_window()
 
         fast_final = dict(zip(keys, flat[: len(keys)], strict=True))
         per_chunk = torch.cat(chunk_losses)
@@ -333,6 +358,7 @@ class TTTInnerLoop:
             per_chunk_loss=per_chunk.detach(),
             token_nll=torch.cat(token_nlls, dim=-1).detach().reshape(-1),
             fast_final=fast_final,
+            backward_done=per_window,
         )
 
 

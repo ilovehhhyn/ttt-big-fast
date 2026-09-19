@@ -210,3 +210,39 @@ def test_truncated_bptt_matches_exact_when_window_covers_everything():
     assert max((a - b).abs().max().item() for a, b in zip(g_exact, g_short, strict=True)) > 1e-9, (
         "a one-chunk truncation window must change the meta-gradient"
     )
+
+
+def test_per_window_backward_matches_single_backward():
+    """Per-window TBPTT must accumulate exactly the gradient one backward would.
+
+    Gradients are linear in the loss, so summing the backwards of disjoint window losses
+    equals one backward of their sum -- PROVIDED each window's graph reaches the same
+    parameters. This is what makes the memory optimisation (freeing a window's graph as
+    soon as it is charged) free of any change to the science.
+    """
+    cfg, model, split = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
+    trunc = 2
+    c = Config(model=cfg.model, inner=cfg.inner, outer=cfg.outer,
+               train=TrainConfig(seq_len=cfg.train.seq_len, tokens_per_step=cfg.train.tokens_per_step,
+                                 micro_batch=1, remat_group=1, truncate_bptt=trunc, dtype="fp32"))
+    loop = TTTInnerLoop(model, c, build_inner_optimizer(c.inner))
+    ids, tgt, mask = batch(c)
+    slow = [v for _, v in sorted(split.slow.items())]
+
+    # Reference: truncation active, but a single backward at the end (backward_scale=None).
+    ref = loop.run_sequence(ids, tgt, mask, dict(split.fast))
+    assert not ref.backward_done
+    g_ref = torch.autograd.grad(ref.loss, slow, allow_unused=True)
+    g_ref = [torch.zeros_like(p) if g is None else g for g, p in zip(g_ref, slow, strict=True)]
+
+    # Per-window: run_sequence does the backward itself, into .grad.
+    for p in slow:
+        p.grad = None
+    got = loop.run_sequence(ids, tgt, mask, dict(split.fast), backward_scale=1.0)
+    assert got.backward_done, "backward_scale + truncate_bptt must take the per-window path"
+    assert not got.loss.requires_grad, "an already-charged loss must not be differentiated again"
+    assert torch.allclose(ref.loss, got.loss), "per-window backward must not change the loss"
+
+    for p, g in zip(slow, g_ref, strict=True):
+        have = torch.zeros_like(p) if p.grad is None else p.grad
+        assert torch.allclose(have, g, atol=1e-10), (have - g).abs().max().item()

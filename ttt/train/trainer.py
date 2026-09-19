@@ -82,11 +82,15 @@ class Trainer:
             ids = batch["input_ids"].to(self.device)
             tgt = batch["targets"].to(self.device)
             mask = batch["loss_mask"].to(self.device)
-            out = self.loop.run_sequence(ids, tgt, mask, dict(self.split.fast),
-                                         lr_scale=scale, lr_mult=self._lr_mult())
             # Divide before backward so the accumulated gradient is the mean over
-            # sequences, matching a single large batch.
-            (out.loss / self.seqs_per_step).backward()
+            # sequences, matching a single large batch. Under truncated BPTT the inner
+            # loop applies that same 1/seqs_per_step itself, window by window, so that
+            # each window's graph can be freed as soon as it has been charged.
+            out = self.loop.run_sequence(ids, tgt, mask, dict(self.split.fast),
+                                         lr_scale=scale, lr_mult=self._lr_mult(),
+                                         backward_scale=1.0 / self.seqs_per_step)
+            if not out.backward_done:
+                (out.loss / self.seqs_per_step).backward()
             total += out.loss.detach().item()
             if self.empty_cache:
                 # Each sequence's second-order graph is released by backward(), but the
