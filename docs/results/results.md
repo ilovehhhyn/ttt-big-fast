@@ -249,3 +249,35 @@ the remaining gap is exactly what the longer run tests.
   cannot show the context-scaling behaviour the method targets. The 32K stage is where that
   would appear.
 - 18 outer steps is a pilot, not the planned 250-step sweep.
+
+## The regime matters: TTT helps at 32K, where the sliding window actually binds
+
+At 8K with k=8192 the window equals the context, so sliding-window attention IS full
+attention and the model already sees every token. The paper says this explicitly:
+*"SWA with k = 8K is exactly full attention"*. In that regime TTT has nothing to recover
+and every arm B measurement was negative. That is a property of the evaluation setting,
+not of the method.
+
+Moving to the paper's extension setting - PG-19 books at 32K context with k=8192, so
+T/k = 4 and the window genuinely discards information - reverses the result.
+
+**Llama-3.2-1B, PG-19, 32768 context, window 8192, chunk 1024 (32 chunks), 16 held-out books:**
+
+| arm | inner LR | multiple of e2e step | loss | delta vs no TTT |
+|---|---|---|---|---|
+| A | - (no TTT) | - | 2.4216 | - |
+| B | **7e-6** | **0.10x** | **2.2828** | **-0.1388** |
+| B | 2e-5 | 0.28x | 2.5510 | +0.1294 |
+| B | 7e-5 | 0.99x | 7.7496 | +5.3280 |
+
+**Test-time training improves held-out loss by 0.139 nats with no meta-learning at all**,
+once the window is small enough relative to the context for the compressed memory to be
+worth having. The optimum is around a tenth of the e2e-equivalent step, far gentler than
+the paper's own setting needs, which is consistent with our base model being a heavily
+pretrained Llama rather than a model meta-trained from scratch.
+
+Two practical notes. Evaluation at 32K costs 10.3 GiB without TTT and 36.7 GiB with it, so
+the regime is cheap to explore. And the frozen prefix had to be segmented to get here: run
+in one shot over 32768 tokens it holds 72 GiB of activations by itself, which alone exhausts
+an 80 GiB card. Segmenting it with a rolling KV cache is exact rather than approximate,
+because sliding-window attention never looks back further than the cache carries.
