@@ -49,7 +49,8 @@ class StepMetrics:
 
 class Trainer:
     def __init__(self, cfg: Config, model, split: ParamSplit, loop: TTTInnerLoop,
-                 optimizer: torch.optim.Optimizer, train_iter, *, device: torch.device) -> None:
+                 optimizer: torch.optim.Optimizer, train_iter, *, device: torch.device,
+                 empty_cache: bool = False) -> None:
         self.cfg = cfg
         self.model = model
         self.split = split
@@ -57,6 +58,7 @@ class Trainer:
         self.optimizer = optimizer
         self.train_iter = train_iter
         self.device = device
+        self.empty_cache = empty_cache and device.type == "cuda"
         self.slow_params: list[Tensor] = [v for _, v in sorted(split.slow.items())]
         self.seqs_per_step = cfg.train.seqs_per_step
         assert self.seqs_per_step >= 1
@@ -86,6 +88,13 @@ class Trainer:
             # sequences, matching a single large batch.
             (out.loss / self.seqs_per_step).backward()
             total += out.loss.detach().item()
+            if self.empty_cache:
+                # Each sequence's second-order graph is released by backward(), but the
+                # caching allocator keeps those blocks. Returning them to the driver
+                # between sequences trades a little speed for headroom, which is what
+                # decides whether a long-context step fits at all.
+                del out
+                torch.cuda.empty_cache()
 
         gnorm = torch.nn.utils.clip_grad_norm_(self.slow_params, self.cfg.outer.grad_clip)
         self.optimizer.step()

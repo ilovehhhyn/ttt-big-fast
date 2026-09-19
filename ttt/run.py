@@ -136,6 +136,8 @@ def main() -> None:
     p.add_argument("--window", type=int, default=8192)
     p.add_argument("--fast-blocks", type=int, default=4)
     p.add_argument("--remat-group", type=int, default=0)
+    p.add_argument("--empty-cache", action="store_true",
+                   help="release cached GPU blocks between sequences (slower, more headroom)")
     p.add_argument("--truncate-bptt", type=int, default=0,
                    help="detach the carry every K chunks; meta-gradient spans <=K inner steps (0=exact)")
     p.add_argument("--prefix-segment", type=int, default=0,
@@ -179,7 +181,8 @@ def main() -> None:
         train_loader = build_dataloader(Path(args.data), "train", args.seq_len, 1,
                                         shuffle=True, seed=args.seed, num_workers=2)
         it = iter(_cycle(train_loader))
-        trainer = Trainer(cfg, model, split, loop, opt, it, device=device)
+        trainer = Trainer(cfg, model, split, loop, opt, it, device=device,
+                          empty_cache=args.empty_cache)
         history = []
         for step in range(args.steps):
             m = trainer.train_step(step)
