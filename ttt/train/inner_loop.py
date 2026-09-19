@@ -36,6 +36,8 @@ carry the second-order path and must use the math SDPA backend.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from dataclasses import dataclass
 from math import sqrt
 
@@ -150,6 +152,7 @@ class TTTInnerLoop:
         self.model = model
         self.cfg = cfg
         self.inner_opt = inner_opt
+        self.on_group: Callable[[int, tuple[Tensor, ...]], None] | None = None
         self.num_chunks = cfg.num_chunks
         self.chunk_size = cfg.model.chunk_size
         self.group = resolve_remat_group(self.num_chunks, cfg.train.remat_group)
@@ -303,6 +306,10 @@ class TTTInnerLoop:
             flat = out[: len(keys) + n_state_t + n_cache_t]
             chunk_losses.append(out[-2])
             token_nlls.append(out[-1])
+            # Diagnostic only: lets a probe read the memory growth per group without
+            # changing the computation. None in every real run.
+            if self.on_group is not None:
+                self.on_group(start, flat)
             # Cut the gradient path at the window boundary. The VALUES carry forward
             # unchanged, so the forward computation and the reported loss are identical;
             # only the backward stops here, which is what bounds memory.

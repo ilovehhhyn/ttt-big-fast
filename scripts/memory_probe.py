@@ -71,6 +71,15 @@ def main():
     # overstated 8K by ~17 GiB versus the actual runner).
     del prefix, logits, caches
     import gc; gc.collect(); torch.cuda.empty_cache()
+    # Per-group growth: allocated memory after each checkpointed group, plus the size
+    # of the carry itself. The slope separates "the carry is big" from "something else
+    # accumulates per chunk", which the fast_blocks 4-vs-1 comparison could not.
+    def on_group(start, flat):
+        carry = sum(x.numel() * x.element_size() for x in flat)
+        print(f"  group@{start:3d}: allocated={gib(torch.cuda.memory_allocated()):6.2f} GiB "
+              f"carry={gib(carry):5.2f} GiB", flush=True)
+    loop.on_group = on_group
+
     torch.cuda.reset_peak_memory_stats()
     try:
         out = loop.run_sequence(ids, tgt, mask, dict(split.fast), lr_scale=1.0,
