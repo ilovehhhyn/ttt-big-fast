@@ -288,3 +288,49 @@ the regime is cheap to explore. And the frozen prefix had to be segmented to get
 in one shot over 32768 tokens it holds 72 GiB of activations by itself, which alone exhausts
 an 80 GiB card. Segmenting it with a rolling KV cache is exact rather than approximate,
 because sliding-window attention never looks back further than the cache carries.
+
+### Corrected 32K numbers, and an evaluation flaw worth recording
+
+The first 32K evaluation was contaminated. PG-19's validation split opens with the King
+James Bible, which the base model has memorised: 0.19 nats and only 1,039 distinct tokens
+over 7K positions. That book is long enough that 16 sequences of 32768 tokens never left
+it, so the entire evaluation sat on trivially predictable text. All arms saw the same data,
+so the deltas were directionally right, but the absolute numbers were meaningless.
+
+Fixed by shuffling the validation split with a fixed seed: still deterministic and
+reproducible, but the sequences now spread across books.
+
+**Llama-3.2-1B, PG-19, 32768 context, window 8192, 32 held-out sequences across books:**
+
+| arm | inner LR | x e2e step | loss | delta vs no TTT |
+|---|---|---|---|---|
+| A | - | - | 3.7119 | - |
+| B | 2e-6 | 0.028x | 3.5995 | -0.1124 |
+| B | **4e-6** | **0.057x** | **3.5694** | **-0.1424** |
+| B | 7e-6 | 0.099x | 3.5862 | -0.1257 |
+| B | 2e-5 | 0.28x | 3.7788 | +0.0670 |
+
+The result survives the fix: same optimum, same U-shape, -0.142 nats.
+
+### Where the gain comes from (paper Fig. 6 analysis, on clean data)
+
+Loss by token index at the optimal inner LR, against no TTT:
+
+| token range | arm A loss | delta with TTT |
+|---|---|---|
+| 0 - 1K | 2.5301 | +0.0000 |
+| 1K - 2K | 2.3600 | +0.0002 |
+| 2K - 4K | 2.3261 | +0.0010 |
+| 4K - 8K | 2.2701 | +0.0021 |
+| 8K - 16K | 4.2054 | **-0.1132** |
+| 16K - 32K | 4.1573 | **-0.2289** |
+
+Inside the 8192 window TTT changes nothing (+0.002 at most): attention already has the
+context, so there is nothing to recover. Loss jumps from 2.27 to 4.21 the moment the
+window starts discarding tokens, and that is exactly where TTT pays - increasingly so
+with distance.
+
+**This is the opposite of the paper's Figure 6**, which finds the advantage concentrated in
+EARLY tokens. The difference is explainable: their W0 is meta-learned from scratch, so their
+initialisation itself is better everywhere, whereas ours is a frozen pretrained Llama whose
+only benefit from TTT is the memory mechanism. Our curve isolates that mechanism cleanly.
