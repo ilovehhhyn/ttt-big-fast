@@ -71,6 +71,19 @@ def main():
     # overstated 8K by ~17 GiB versus the actual runner).
     del prefix, logits, caches
     import gc; gc.collect(); torch.cuda.empty_cache()
+
+    # Does checkpointing actually FREE the prefix? run_sequence wraps it exactly like
+    # this, so whatever stays resident here is what every chunk then builds on top of.
+    torch.cuda.reset_peak_memory_stats()
+    def _prefix(i):
+        with loop._autocast("cuda"):
+            return model.prefix_forward(i, segment=(a.prefix_segment or None))
+    pc = torch.utils.checkpoint.checkpoint(_prefix, ids, use_reentrant=False)
+    print(f"prefix (checkpointed): resident={gib(torch.cuda.memory_allocated()):.2f} GiB "
+          f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
+    del pc; gc.collect(); torch.cuda.empty_cache()
+    print(f"after freeing prefix:  resident={gib(torch.cuda.memory_allocated()):.2f} GiB", flush=True)
+
     # Per-group growth: allocated memory after each checkpointed group, plus the size
     # of the carry itself. The slope separates "the carry is big" from "something else
     # accumulates per chunk", which the fast_blocks 4-vs-1 comparison could not.
