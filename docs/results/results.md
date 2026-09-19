@@ -266,9 +266,16 @@ T/k = 4 and the window genuinely discards information - reverses the result.
 | arm | inner LR | multiple of e2e step | loss | delta vs no TTT |
 |---|---|---|---|---|
 | A | - (no TTT) | - | 2.4216 | - |
-| B | **7e-6** | **0.10x** | **2.2828** | **-0.1388** |
+| B | 2e-6 | 0.028x | 2.3062 | -0.1154 |
+| B | **4e-6** | **0.057x** | **2.2669** | **-0.1547** |
+| B | 7e-6 | 0.099x | 2.2828 | -0.1388 |
+| B | 1e-5 | 0.14x | 2.3296 | -0.0920 |
 | B | 2e-5 | 0.28x | 2.5510 | +0.1294 |
 | B | 7e-5 | 0.99x | 7.7496 | +5.3280 |
+
+The curve is cleanly U-shaped with an interior optimum at 0.057x the e2e-equivalent step.
+Every setting from 0.028x to 0.14x beats no-TTT; the method is not knife-edge sensitive,
+it simply needs a step roughly an order of magnitude gentler than the paper's own.
 
 **Test-time training improves held-out loss by 0.139 nats with no meta-learning at all**,
 once the window is small enough relative to the context for the compressed memory to be
