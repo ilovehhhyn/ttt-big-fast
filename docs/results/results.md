@@ -334,3 +334,25 @@ with distance.
 EARLY tokens. The difference is explainable: their W0 is meta-learned from scratch, so their
 initialisation itself is better everywhere, whereas ours is a frozen pretrained Llama whose
 only benefit from TTT is the memory mechanism. Our curve isolates that mechanism cleanly.
+
+## Context scaling: the benefit grows with context length
+
+Same model, same inner rule (normalized SGD at 4e-6), same window k=8192, same PG-19
+validation books. Only the context length T changes, so T/k is how much of the sequence
+falls outside the attention window.
+
+| context T | T/k | arm A (no TTT) | arm B (TTT) | delta |
+|---|---|---|---|---|
+| 8192 (DCLM) | 1 | 2.4940 | 2.6632 | **+0.1692** |
+| 16384 | 2 | 2.9764 | 2.9286 | **-0.0478** |
+| 32768 | 4 | 3.7119 | 3.5694 | **-0.1424** |
+
+Test-time training goes from harmful to helpful to more helpful as more of the context
+falls outside the window. This is the qualitative behaviour TTT-E2E's Figure 1 reports -
+their method keeps its advantage as context grows while RNN baselines lose theirs - and we
+reproduce it here from a frozen pretrained Llama with no meta-learning at all.
+
+The 8K row is a different dataset (DCLM rather than PG-19) because 8K is the pre-training
+stage in the paper's protocol, so its absolute loss is not comparable to the other two rows.
+Its sign is what matters: at T/k = 1 the window is not a bottleneck, sliding-window
+attention is full attention, and TTT can only add noise.
