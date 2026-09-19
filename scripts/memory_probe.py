@@ -24,6 +24,8 @@ def main():
     ap.add_argument("--remat-blocks", action="store_true")
     ap.add_argument("--prefix-segment", type=int, default=0)
     ap.add_argument("--remat-group", type=int, default=0)
+    ap.add_argument("--staged", action="store_true",
+                    help="also run the grad-enabled staged measurements (they retain their graph)")
     a = ap.parse_args()
 
     dev = torch.device("cuda")
@@ -53,36 +55,36 @@ def main():
         seen.setdefault("attn_out_dtype", out[0].dtype)
     model.blocks[-1].attn.register_forward_hook(hook)
 
+    # Measured FIRST, on a clean allocator: run_sequence wraps the prefix exactly like
+    # this, so this is the real floor every chunk then builds on. The staged grad-enabled
+    # calls below retain their graph, so anything measured after them is inflated.
+    import gc
     torch.cuda.reset_peak_memory_stats()
-    with loop._autocast("cuda"):
-        prefix = model.prefix_forward(ids, segment=(a.prefix_segment or None))
-    print(f"prefix dtype={prefix.dtype} peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
-
-    torch.cuda.reset_peak_memory_stats()
-    caches = model.init_caches(batch=1, device=dev, dtype=prefix.dtype)
-    with loop._autocast("cuda"):
-        logits, _ = model.suffix_forward(prefix[:, :a.chunk], fast=dict(split.fast),
-                                         caches=caches, chunk_index=0)
-    print(f"one suffix chunk: logits dtype={logits.dtype} attn_out={seen.get('attn_out_dtype')} "
-          f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
-
-    # Free the staged measurements: holding `prefix` and `logits` alive here made the
-    # full-sequence number cumulative rather than representative of a real run (it
-    # overstated 8K by ~17 GiB versus the actual runner).
-    del prefix, logits, caches
-    import gc; gc.collect(); torch.cuda.empty_cache()
-
-    # Does checkpointing actually FREE the prefix? run_sequence wraps it exactly like
-    # this, so whatever stays resident here is what every chunk then builds on top of.
-    torch.cuda.reset_peak_memory_stats()
-    def _prefix(i):
+    def _prefix_ckpt(i):
         with loop._autocast("cuda"):
             return model.prefix_forward(i, segment=(a.prefix_segment or None))
-    pc = torch.utils.checkpoint.checkpoint(_prefix, ids, use_reentrant=False)
+    pc = torch.utils.checkpoint.checkpoint(_prefix_ckpt, ids, use_reentrant=False)
     print(f"prefix (checkpointed): resident={gib(torch.cuda.memory_allocated()):.2f} GiB "
           f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
     del pc; gc.collect(); torch.cuda.empty_cache()
     print(f"after freeing prefix:  resident={gib(torch.cuda.memory_allocated()):.2f} GiB", flush=True)
+
+    if a.staged:
+        torch.cuda.reset_peak_memory_stats()
+        with loop._autocast("cuda"):
+            prefix = model.prefix_forward(ids, segment=(a.prefix_segment or None))
+        print(f"prefix (raw) dtype={prefix.dtype} peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
+
+        torch.cuda.reset_peak_memory_stats()
+        caches = model.init_caches(batch=1, device=dev, dtype=prefix.dtype)
+        with loop._autocast("cuda"):
+            logits, _ = model.suffix_forward(prefix[:, :a.chunk], fast=dict(split.fast),
+                                             caches=caches, chunk_index=0)
+        print(f"one suffix chunk: logits dtype={logits.dtype} attn_out={seen.get('attn_out_dtype')} "
+              f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB", flush=True)
+        del prefix, logits, caches
+        gc.collect(); torch.cuda.empty_cache()
+        print(f"after staged:          resident={gib(torch.cuda.memory_allocated()):.2f} GiB", flush=True)
 
     # Per-group growth: allocated memory after each checkpointed group, plus the size
     # of the carry itself. The slope separates "the carry is big" from "something else
