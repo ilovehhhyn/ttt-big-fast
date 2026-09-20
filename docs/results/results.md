@@ -560,6 +560,68 @@ resumed at step 4/10. Against the uninterrupted run `C_32k_q10` (job 14163396):
 On CPU the same procedure through the real CLI is bit-identical (SmolLM2-135M, 10 steps x 8
 metrics and both evaluations per token).
 
+## 2026-09-20, later: the sliding window breaks the un-tuned model
+
+Tables in this section are printed by `scripts/render_tables.py` from the result files; each
+row's settings are read from that file's own arguments, not typed.
+
+### The full-attention diagnostic
+
+| run | settings (from the file) | 0-8K | 8-16K | 16-24K | 24-32K | overall |
+|---|---|---|---|---|---|---|
+| A_32k_perseq | T=32768 k=8192 none lr=- n=32 | 2.3279 | 4.2052 | 4.1841 | 4.1308 | 3.7119 |
+| A_32k_fullattn | T=32768 k=32768 none lr=- n=32 | 2.3279 | 2.3119 | 2.2792 | 2.3183 | 2.3092 |
+| B_32k_perseq | T=32768 k=8192 normalized_sgd lr=4e-06 n=32 | 2.3292 | 4.0920 | 3.9800 | 3.8757 | 3.5691 |
+| B_32k_fullattn | T=32768 k=32768 normalized_sgd lr=4e-06 n=32 | 2.3293 | 2.3138 | 2.2802 | 2.3192 | 2.3105 |
+
+The same un-tuned weights, scored with full attention instead of the 8192-token window, show no
+cliff: about 2.30 everywhere. The first band is identical in both, as it must be (inside the
+window the two are the same computation). Beyond the window the windowed model is about 1.85
+nats worse than itself with full attention. So the collapse is caused by the sliding window,
+not by missing information: a Llama pretrained with full attention does not function when its
+attention is cut to the last 8192 tokens. TTT on top of full attention does nothing (2.3105
+against 2.3092), the T/k = 1 behaviour. Which property of the window breaks the model has not
+been tested.
+
+This changes how every arm B number must be read. Arm B's gain sits entirely beyond the window,
+which was taken as the signature of fast weights acting as a compressed memory. It is equally
+the signature of fast weights compensating for a broken model, because the breakage also exists
+only beyond the window. The position pattern does not separate the two readings; the size of
+what out-of-window context is worth to a HEALTHY model does (next subsection but one).
+
+### The matched T/k = 1 row
+
+PG-19 at T = 8192, the same inner rule as the 32K row (normalized SGD, 4e-6), 128 sequences
+from 50 books. This replaces the unmatched 8K row of "Context scaling" above.
+
+| T | T/k | arm A | arm B | B - A | source files |
+|---|---|---|---|---|---|
+| 8192 | 1 | 2.3067 | 2.3078 | +0.0012 | A_8k_pg19, B_8k_pg19 |
+| 32768 | 4 | 3.7119 | 3.5691 | -0.1428 | A_32k_perseq, B_32k_perseq |
+
+`scripts/paired_ttt_effect.py B_8k_pg19.json --baseline A_8k_pg19.json`, clustered by book: TTT
+changes the loss by -0.0016 nats per book (positive = TTT helps), se 0.0002, t = -7.33, 95% CI
+[-0.0020, -0.0011], positive in 6 of 50 books. When the whole context is inside the window the
+inner loop is slightly but significantly harmful. This agrees with the in-window band of the
+32K evaluation (-0.0013).
+
+### AdamW: the full curve
+
+| inner lr | loss | vs arm A (3.7119) |
+|---|---|---|
+| 1e-06 | 3.7021 | -0.0098 |
+| 2e-06 | 3.6858 | -0.0261 |
+| 4e-06 | 3.6597 | -0.0522 |
+| 7e-06 | 3.6369 | -0.0750 |
+| 2e-05 | 3.6175 | -0.0944 |
+| 5e-05 | 3.6623 | -0.0495 |
+| 0.0001 | 3.7715 | +0.0596 |
+| 0.0002 | 3.9852 | +0.2733 |
+
+AdamW's optimum as arm B is bracketed at about 2e-5 (-0.0944), five times the step normalized
+SGD prefers (4e-6, -0.1428), and its best is about two thirds of normalized SGD's best. Above
+5e-5 it is worse than no TTT. No meta-trained run with AdamW as the inner rule exists.
+
 ## Runs in flight (as last observed 2026-09-20, about 14:25 ET)
 
 On 2026-09-20 `sbatch --test-only` estimated a start of 2026-09-24 for any job longer than
