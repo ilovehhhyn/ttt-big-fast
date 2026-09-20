@@ -406,9 +406,12 @@ with `lr_rms = 0`). Run `C_32k_abl`, 8 training steps:
 | off, identical weights | 2.7370 |
 | **difference** | **+0.0272 nats** (2.8% perplexity) |
 
-Paired over the 32 evaluation sequences: mean +0.0272, sd 0.0145, se 0.0026, t = 10.6,
-95% CI [+0.0220, +0.0324]. Test-time training helps on 32 of 32 sequences (smallest
-+0.0111, largest +0.0724).
+The 32 evaluation sequences come from 22 distinct PG-19 books (at most 3 from one book),
+so they are not independent. Averaging the paired difference within each book and testing
+across books (`scripts/paired_ttt_effect.py`): **mean +0.0248, se 0.0026, t = 9.67,
+95% CI [+0.0194, +0.0301], positive in 22 of 22 books.** The naive per-sequence version
+(mean +0.0272, t = 10.63, CI [+0.0220, +0.0324], 32 of 32) is slightly larger and narrower,
+as expected; the per-book figure is the one to quote.
 
 By position, with the 8192-token window marked:
 
@@ -437,11 +440,101 @@ this is suggestive only.
   steps out of 32. It is what makes 32K fit on one 80 GiB card, and it is a biased
   estimator (PERK, arXiv:2507.06415, accepts the same bias). A `truncate_bptt=1` run is
   queued to measure how much the window length matters.
-- **The 32 sequences are not independent documents.** PG-19's validation split has about
-  50 books, so several sequences can come from one book and the interval above is somewhat
-  too narrow. With 32 of 32 positive this does not threaten the sign.
 - **Budget versus the paper.** TTT-E2E's 760M 32K extension uses 32 sequences per step
   (1,048,576 tokens) for far more steps than this, and Books3 where we use PG-19 (the free
   alternative). These numbers are not comparable to their published tables.
 - **`peak_gib` in the result files is the training peak**, not the evaluation peak: it is
   read once at the end of the process. Evaluation at 32K peaks at 11.5 GiB.
+
+## 2026-09-20: TTT alone with a per-book interval, and what the 32K baseline really is
+
+### TTT alone (arm B against arm A), nothing trained
+
+Arms A and B were re-scored at 32K with per-sequence losses recorded (login-node H100;
+A = 3.7119, identical to the earlier A100 value; B = 3.5691 against 3.5694 earlier).
+`scripts/paired_ttt_effect.py B_32k_perseq.json --baseline A_32k_perseq.json`, clustered by
+book (32 sequences, 22 books):
+
+**+0.1405 nats, se 0.0061, t = 23.2, 95% CI [+0.1279, +0.1531], positive in 22 of 22 books.**
+(Per sequence: +0.1428, t = 25.3, 32 of 32.)
+
+| token positions | arm A (no TTT) | arm B (TTT) | difference |
+|---|---|---|---|
+| 0 - 8K (inside the window) | 2.3279 | 2.3292 | -0.0013 |
+| 8K - 16K | 4.2052 | 4.0920 | +0.1132 |
+| 16K - 24K | 4.1841 | 3.9800 | +0.2041 |
+| 24K - 32K | 4.1308 | 3.8757 | +0.2550 |
+
+### The un-tuned model falls off a cliff at the window edge
+
+Arm A scores 2.33 inside the 8192-token window and 4.13 to 4.21 beyond it. That is a cliff,
+not a gradual loss of context. The plain LoRA fine-tune (`--inner-lr 0`, 10 steps) scores
+2.3754 in the window and about 2.83 beyond it: fine-tuning made the in-window loss slightly
+WORSE (+0.05) and the beyond-window loss about 1.35 nats better.
+
+So the earlier description of arm C's gain over arm A as "adaptation to PG-19" was wrong.
+Adaptation to the domain would help inside the window too, and it does not. The working
+hypothesis, NOT yet verified, is that a Llama pretrained with full attention breaks under a
+sliding window once its earliest tokens leave the window, and that fine-tuning repairs this.
+The diagnostic is arm A at 32K with full attention (`--window 32768`); it was launched on
+the login node on 2026-09-20 as `A_32k_fullattn` (with `B_32k_fullattn`), and its result
+had not been read when this was written.
+
+### What TTT-E2E's protocol says the baseline is
+
+From the reference repository (`configs/training/760m/ext.yaml`,
+`configs/experiment/760m/extension/`): every model in their 32K comparison is first
+extension-trained at 32K for 725 steps at 32 sequences per step on Books3 (about 760M
+tokens), including the full-attention baseline (`ext-760m-fa-32K.yaml`, which also raises
+`rope_theta` to 2,000,000). Their outer settings equal ours (lr 4e-4, 10% warmup, end lr
+1e-5, weight decay 0.1, beta2 0.95). Their pretraining uses SWA with an 8192 window.
+
+Consequences for reading the tables above:
+- Un-tuned arms A and B are outside that protocol. They remain useful as a mechanism probe
+  (TTT helps only beyond the window, with nothing trained), not as the baseline.
+- The protocol-faithful baseline is an extension-trained model without TTT, which is what
+  the `--inner-lr 0` control is. Arm C should be compared against it at equal budget:
+  2.7125 against 2.6690 at 10 steps; the 20-step pair is queued.
+- Our extension budget (10 to 20 steps x 131,072 tokens = 1.3M to 2.6M tokens) is roughly
+  300 to 600 times smaller than theirs. Matching it would cost about 212 A100-hours on one
+  GPU at the measured 33 s per sequence. Not decided.
+- `--inner none` was checked to be bit-identical to `--inner-lr 0` on SmolLM2-135M (all 10
+  steps and the evaluation, difference exactly 0), so longer controls can skip the double
+  backward. A real-hardware check at 32K (`C_32k_ctl_none10`, job 14195736) was submitted
+  and had not been read when this was written.
+
+### AdamW as the inner optimizer at 32K (arm B, nothing trained)
+
+beta1 = beta2 = 0.9, eps = 1e-8, warm start from the first chunk's gradient.
+
+| inner lr | loss | vs arm A (3.7119) |
+|---|---|---|
+| 1e-6 | 3.7021 | -0.0098 |
+| 2e-6 | 3.6858 | -0.0261 |
+| 4e-6 | 3.6597 | -0.0522 |
+| 7e-6 | pending | |
+| 2e-5 | pending | |
+
+Normalized SGD at the same per-element step (4e-6) reaches 3.5691, so at equal step size
+AdamW recovers about a third as much. The curve was still descending at 4e-6; its optimum
+is not yet located.
+
+### Checkpoint / resume on real hardware
+
+`scripts/della/resume_check.sbatch` (job 14174410, A100): the 10-step arm C configuration
+was killed with SIGKILL after 4 checkpoint writes (exit 137) and the identical command
+resumed at step 4/10. Against the uninterrupted run `C_32k_q10` (job 14163396):
+
+- evaluation 2.66892 against 2.66895;
+- loss differences per step: 0, 0, 9.8e-5, 1.9e-5 before the kill and 1.0e-4, 2.3e-5,
+  1.7e-4, 9.1e-5, 3.0e-5, 7.4e-5 after the resume, i.e. no change at the boundary;
+- the first difference of any kind is the gradient norm at step 0 (6.69440 against
+  6.69432), before any checkpoint existed. The two runs were on different nodes
+  (della-l08g2, della-l07g2), so this is kernel nondeterminism. Losses stay identical
+  through step 1 because the outer learning rate at step 0 is exactly 0.
+- The largest gradient-norm difference is 1.7% at step 8. Whether that is within the
+  run-to-run noise of two UNINTERRUPTED runs is being measured by `C_32k_q10_repeat` (job
+  14194873); that result had not been read when this was written.
+
+On CPU the same procedure through the real CLI is bit-identical (SmolLM2-135M, 10 steps x 8
+metrics and both evaluations per token).
