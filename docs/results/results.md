@@ -687,6 +687,56 @@ as arm C) and ran out of memory in step 1 with 78.73 GiB in use: arm C's 68 GiB 
 plus the gradients and the two AdamW moments of 1.03 B parameters. Step 0 fits only because
 AdamW allocates its moments at the first optimizer step.
 
+Validation at `truncate_bptt=1` (jobs 14198690 and 14198691; 10 steps, 4 sequences per step,
+115 seconds per step): **arm D fits one 80 GiB GPU, training peak 71.8 GiB.** Arm C has a
+matched run queued at this truncation (`C32k_t1`).
+
+| outer lr | loss at step 5 | loss at step 9 | evaluation (32 sequences) |
+|---|---|---|---|
+| 4e-4 (arm C's rate) | 7.6948 | 7.2855 | 7.0392 |
+| 4e-5 | 3.2999 | 2.9330 | 2.7306 |
+
+Full fine-tuning of the pretrained model at the LoRA learning rate DIVERGES (the loss more than
+doubles by step 5). At 4e-5 it trains normally and reaches 2.7306, which is worse than arm C at
+the same step count (2.6690) and worse than the plain LoRA fine-tune (2.7125). This is a
+feasibility run, not a test of H1: it differs from arm C's run in truncation (1 against 2) and
+in learning rate, 4e-5 may simply be too cautious for 10 steps, and as implemented arm D does
+not train W0. A fair arm D needs its own learning-rate sweep at `truncate_bptt=1`.
+
+### The 2x2 behind H1
+
+H1 is about slow weights meta-learned THROUGH the inner loop. At a fixed 10-step budget, cross
+how the slow weights were trained with whether TTT runs at evaluation. `--load-slow` evaluates
+saved slow weights under a chosen inner rule; each run below also re-evaluated its diagonal
+cell, which reproduced the number already on record (2.6688 for 2.66892; 2.7124 for 2.71244),
+so the right weights were loaded. Weights: `C_32k_resumecheck.ckpt` (trained with
+`--inner normalized_sgd`, 4e-6) and `C_32k_ctl_none10.ckpt` (trained with `--inner none`).
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop | 2.6688 | 2.6888 |
+| plain fine-tune | 2.6944 | 2.7124 |
+
+`scripts/two_by_two.py`, per document (32 sequences, 22 books), positive = lower loss:
+
+| effect | per document | 95% CI | t | documents positive |
+|---|---|---|---|---|
+| TTT at eval, on meta-learned weights | +0.0179 | [+0.0131, +0.0227] | 7.72 | 22/22 |
+| TTT at eval, on plain fine-tuned weights | +0.0164 | [+0.0121, +0.0206] | 8.07 | 22/22 |
+| training through the inner loop, TTT on | +0.0247 | [+0.0219, +0.0275] | 18.59 | 22/22 |
+| training through the inner loop, TTT off | +0.0232 | [+0.0204, +0.0260] | 17.18 | 22/22 |
+| INTERACTION: does training through the inner loop make TTT more useful? | +0.0015 | [+0.0005, +0.0026] | 2.95 | 17/22 |
+
+The two effects are close to additive. Test-time training is worth about the same on either set
+of weights, and training through the inner loop gives better slow weights almost equally with
+TTT switched OFF. The interaction, which is the quantity H1 is about, is distinguishable from
+zero but is +0.0015 nats: about a thirtieth of arm C's lead over the plain fine-tune. Why
+training through the inner loop helps with TTT off is NOT explained. Caveats: one training run
+per row (no seeds; re-running one configuration moves the evaluation by about 2.5e-4, far less
+than these effects, but seed-to-seed variation is unmeasured); 10 steps; and both models are
+still about half a nat from healthy beyond the window, so all four cells sit in the repair
+regime of the previous subsections.
+
 ## Runs in flight (as last observed 2026-09-20, about 14:25 ET)
 
 On 2026-09-20 `sbatch --test-only` estimated a start of 2026-09-24 for any job longer than
