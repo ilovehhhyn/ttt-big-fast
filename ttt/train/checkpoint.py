@@ -29,7 +29,7 @@ from ttt.model.naming import ParamSplit
 # Arguments that do not influence the trained weights. Everything else must match for a
 # resume to be the same experiment.
 OPERATIONAL_ARGS = frozenset({"out", "ckpt", "device", "hf_cache", "eval_sequences", "eval_ttt_off",
-                              "forgetting_probe_tokens", "load_slow"})
+                              "forgetting_probe_tokens", "load_slow", "ckpt_every"})
 
 _FORMAT = 1
 

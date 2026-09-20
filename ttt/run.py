@@ -203,6 +203,10 @@ def main() -> None:
     p.add_argument("--lora-targets", default="wq,wk,wv,wo,w1,w2,w3",
                    help="w1,w2,w3 put LoRA on the fast MLPs, meta-learning a rank-r shift "
                         "of the fast-weight initialisation W0")
+    p.add_argument("--ckpt-every", type=int, default=1,
+                   help="checkpoint every N outer steps (and always after the last). 1 suits arm C "
+                        "(0.5 GB); arm D writes ~12 GB per checkpoint, so use a larger interval there. "
+                        "A killed run loses at most N-1 steps of work, never correctness.")
     p.add_argument("--load-slow", default=None,
                    help="EVAL ONLY: evaluate the trained slow weights stored in this checkpoint, under "
                         "whatever inner rule this command specifies (not a resume: settings may differ)")
@@ -219,6 +223,7 @@ def main() -> None:
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
+    assert args.ckpt_every >= 1, f"--ckpt-every must be >= 1, got {args.ckpt_every}"
 
     torch.manual_seed(args.seed)
     cfg, model, split, loop, device = build_everything(args)
@@ -267,8 +272,11 @@ def main() -> None:
         for step in range(start_step, args.steps):
             m = trainer.train_step(step)
             history.append(m.as_log())
-            save_checkpoint(ckpt, step=step + 1, split=split, optimizer=opt,
-                            history=history, fingerprint=fingerprint)
+            # The history is truncated to the checkpointed step on resume by construction:
+            # it is saved together with the weights, so a resume replays steps after it.
+            if (step + 1) % args.ckpt_every == 0 or step == args.steps - 1:
+                save_checkpoint(ckpt, step=step + 1, split=split, optimizer=opt,
+                                history=history, fingerprint=fingerprint)
             if step % 5 == 0 or step == args.steps - 1:
                 print(f"[train] {m.as_log()}", flush=True)
         result["history"] = history
