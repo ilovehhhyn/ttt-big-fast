@@ -249,14 +249,19 @@ def test_per_window_backward_matches_single_backward():
         assert torch.allclose(have, g, atol=1e-10), (have - g).abs().max().item()
 
 
-def test_inference_mode_reports_identical_numbers():
+@pytest.mark.parametrize("optimizer", ["normalized_sgd", "adamw", "muon", "clipped_sgd"])
+def test_inference_mode_reports_identical_numbers(optimizer):
     """inference=True must change only the graph, never a reported value.
+
+    Parametrised over every inner optimizer: AdamW reaches the inner loop through a
+    different route (the _first_grad warm start and carried moments), so a fixture that
+    only ever ran normalized SGD would leave that route untested.
 
     It skips create_graph, the checkpointed regions and the prefix graph, all of which
     exist solely to carry the META-gradient. The TTT updates themselves are unchanged,
     so loss, per-chunk loss and token NLL must match the training path exactly.
     """
-    cfg, model, split = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
+    cfg, model, split = build(InnerConfig(optimizer=optimizer, lr_rms=1e-2, learned_lr=False))
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
     ids, tgt, mask = batch(cfg)
 

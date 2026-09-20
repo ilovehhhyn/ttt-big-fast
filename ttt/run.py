@@ -62,6 +62,15 @@ ARMS = {
 
 
 def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoop, torch.device]:
+    # Arm F is the paper-layout control: the pretrained MLP is kept static as safe storage
+    # and a separate prime MLP carries the fast weights (plan section 0.2). That model
+    # construction does not exist on the Llama path yet, and the ARMS entry below is a
+    # placeholder identical to arm C. Refuse to run rather than report arm C's numbers
+    # under arm F's name.
+    assert args.arm != "F", (
+        "arm F is not implemented: build_llama_ttt cannot yet add a prime MLP, so --arm F "
+        "would silently run arm C's configuration. Implement the prime-MLP construction first."
+    )
     arm = ARMS[args.arm]
     device = torch.device(args.device)
     if args.arm == "E":

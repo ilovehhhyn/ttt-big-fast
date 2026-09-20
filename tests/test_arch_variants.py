@@ -6,6 +6,7 @@ default path is unchanged.
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from ttt.config import LoRAConfig, ModelConfig, RopeConfig, TrainConfig
@@ -102,3 +103,15 @@ def test_prefix_segmented_equals_full():
 
     with _pytest.raises(AssertionError, match="must be <= window_size"):
         m.prefix_forward(ids, segment=16)
+
+
+def test_arm_f_refuses_to_run_until_it_is_implemented():
+    """ARMS["F"] is a placeholder identical to arm C. Running it would publish arm C's
+    numbers under arm F's name, so it must fail loudly instead."""
+    from types import SimpleNamespace
+
+    from ttt.run import ARMS, build_everything
+
+    assert ARMS["F"] == ARMS["C"], "arm F now differs from C: replace this guard with a real test"
+    with pytest.raises(AssertionError, match="arm F is not implemented"):
+        build_everything(SimpleNamespace(arm="F", device="cpu"))
