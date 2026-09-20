@@ -66,7 +66,9 @@ def paired_stats(diffs: list[float]) -> dict:
         "mean": mean,
         "sd": sd,
         "se": se,
-        "t": mean / se if se > 0 else math.inf,
+        # se == 0 means every difference is identical: t is infinite for a nonzero mean
+        # and undefined (0/0) when they are all zero.
+        "t": mean / se if se > 0 else (math.copysign(math.inf, mean) if mean != 0 else math.nan),
         "ci95": (mean - half, mean + half),
         "positive": sum(1 for x in diffs if x > 0),
     }

@@ -6,6 +6,10 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:1
+# 80 GiB cards only. The gpu partition also has 40 GiB A100s; 32K training peaks at
+# 68 GiB, so without this a job can wait days in the queue, land on a 40 GiB card and
+# die at step 0 (a probe did exactly that on della-i12g2).
+#SBATCH --constraint=gpu80
 #SBATCH --time=04:00:00
 #SBATCH --output=/scratch/gpfs/ARORA/hh9077/logs/%x-%j.out
 set -euo pipefail

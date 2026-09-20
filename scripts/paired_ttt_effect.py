@@ -6,6 +6,11 @@ The per-document version is the one to quote: evaluation sequences that fall ins
 same book are not independent (see ttt/eval/paired.py).
 
     python scripts/paired_ttt_effect.py results/C_32k_abl.json
+    python scripts/paired_ttt_effect.py results/B_32k_perseq.json --baseline results/A_32k_perseq.json
+
+With --baseline the "off" condition is the baseline file's evaluation instead of the
+result's own eval_ttt_off block (e.g. arm B against arm A: TTT with nothing trained).
+Both files must describe the same evaluation protocol, which is asserted.
 """
 from __future__ import annotations
 
@@ -27,11 +32,22 @@ def _line(label: str, s: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("result")
+    ap.add_argument("--baseline", default=None,
+                    help="take the OFF condition from this file's eval block instead of eval_ttt_off")
     a = ap.parse_args()
 
     r = json.load(open(a.result))
-    assert "eval_ttt_off" in r, f"{a.result} has no eval_ttt_off block; rerun with --eval-ttt-off"
-    on, off, args = r["eval"], r["eval_ttt_off"], r["args"]
+    args = r["args"]
+    if a.baseline is None:
+        assert "eval_ttt_off" in r, f"{a.result} has no eval_ttt_off block; rerun with --eval-ttt-off"
+        on, off = r["eval"], r["eval_ttt_off"]
+    else:
+        b = json.load(open(a.baseline))
+        # Pairing is only meaningful if both files scored the same sequences the same way.
+        for k in ("data", "seq_len", "window", "chunk", "seed", "eval_sequences"):
+            assert b["args"][k] == args[k], f"--baseline differs in {k}: {b['args'][k]} vs {args[k]}"
+        on, off = r["eval"], b["eval"]
+        print(f"OFF condition = {Path(a.baseline).name} (arm {b['arm']}); ON = arm {r['arm']}")
     assert on["num_sequences"] == off["num_sequences"], "on/off evaluated different sequence counts"
     n, seq_len = on["num_sequences"], args["seq_len"]
     diffs = [y - x for x, y in zip(on["per_sequence_loss"], off["per_sequence_loss"], strict=True)]
@@ -44,7 +60,7 @@ def main() -> None:
 
     print(f"{Path(a.result).name}: steps={args['steps']} tokens/step={args['tokens_per_step']} "
           f"truncate_bptt={args['truncate_bptt']}")
-    print(f"inner loop ON {on['loss']:.4f}   OFF (same weights) {off['loss']:.4f}   "
+    print(f"ON {on['loss']:.4f}   OFF {off['loss']:.4f}   "
           f"difference {off['loss'] - on['loss']:+.4f} nats")
     print(f"{n} sequences drawn from {len(set(docs))} distinct documents "
           f"(largest share: {max(docs.count(d) for d in set(docs))} sequences from one document)")
