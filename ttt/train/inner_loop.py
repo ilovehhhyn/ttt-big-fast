@@ -310,6 +310,17 @@ class TTTInnerLoop:
         # leaf, never prefix_out, or the cut leaks and the first backward frees the
         # prefix graph that later windows still need.
         prefix_leaf = prefix_out.detach().requires_grad_(True) if per_window else prefix_out
+        # Same cut for any OTHER non-leaf shared by every window. The learned inner LR is
+        # exp(inner_lr_log), computed once per sequence and read by every chunk: without
+        # the cut, window 1's backward frees that exp node and window 2 dies with
+        # "backward through the graph a second time".
+        lr_mult_src = lr_mult if (per_window and lr_mult is not None) else None
+        if lr_mult_src is not None:
+            lr_mult = {k: v.detach().requires_grad_(True) for k, v in lr_mult_src.items()}
+        assert not (per_window and isinstance(lr_scale, Tensor) and lr_scale.requires_grad), (
+            "a differentiable lr_scale would be shared across windows and freed by the "
+            "first backward; pass a float, or give it the same leaf treatment as lr_mult"
+        )
 
         # Seed the inner-optimizer state BEFORE the checkpointed loop so the region is
         # a pure function of its inputs. AdamW's warm start needs g_1, which costs one
@@ -406,6 +417,13 @@ class TTTInnerLoop:
             # One backward through the prefix, carrying the gradient every window
             # accumulated at the cut. backward_scale is already folded into it.
             prefix_out.backward(prefix_leaf.grad)
+        if lr_mult_src is not None:
+            # Push each cut LR multiplier back into exp() -> inner_lr_log. Each key is its
+            # own small graph, so no retain_graph is needed between them.
+            for k, leaf in lr_mult.items():
+                src = lr_mult_src[k]
+                if leaf.grad is not None and src.requires_grad:
+                    src.backward(leaf.grad)
 
         fast_final = dict(zip(keys, flat[: len(keys)], strict=True))
         per_chunk = torch.cat(chunk_losses)

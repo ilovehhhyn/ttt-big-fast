@@ -283,7 +283,8 @@ def test_inference_mode_rejects_backward_scale():
 
 
 @pytest.mark.parametrize("optimizer", ["normalized_sgd", "adamw"])
-def test_per_window_backward_matches_single_backward_across_optimizers(optimizer):
+@pytest.mark.parametrize("learned_lr", [False, True])
+def test_per_window_backward_matches_single_backward_across_optimizers(optimizer, learned_lr):
     """The prefix cut must hold for stateful inner optimizers too.
 
     AdamW warm-starts its moments from g_1, which is computed outside the chunk loop and
@@ -292,7 +293,7 @@ def test_per_window_backward_matches_single_backward_across_optimizers(optimizer
     it, and window 2 dies with 'backward through the graph a second time'. So this asserts
     both that it RUNS and that it gives the same gradient as one backward.
     """
-    cfg, model, split = build(InnerConfig(optimizer=optimizer, lr_rms=1e-2, learned_lr=False))
+    cfg, model, split = build(InnerConfig(optimizer=optimizer, lr_rms=1e-2, learned_lr=learned_lr))
     c = Config(model=cfg.model, inner=cfg.inner, outer=cfg.outer,
                train=TrainConfig(seq_len=cfg.train.seq_len, tokens_per_step=cfg.train.tokens_per_step,
                                  micro_batch=1, remat_group=1, truncate_bptt=2, dtype="fp32"))
@@ -300,13 +301,16 @@ def test_per_window_backward_matches_single_backward_across_optimizers(optimizer
     ids, tgt, mask = batch(c)
     slow = [v for _, v in sorted(split.slow.items())]
 
-    ref = loop.run_sequence(ids, tgt, mask, dict(split.fast))
+    def lr_mult():
+        return model.inner_lr_multipliers() if learned_lr else None
+
+    ref = loop.run_sequence(ids, tgt, mask, dict(split.fast), lr_mult=lr_mult())
     g_ref = torch.autograd.grad(ref.loss, slow, allow_unused=True)
     g_ref = [torch.zeros_like(p) if g is None else g for g, p in zip(g_ref, slow, strict=True)]
 
     for p in slow:
         p.grad = None
-    got = loop.run_sequence(ids, tgt, mask, dict(split.fast), backward_scale=1.0)
+    got = loop.run_sequence(ids, tgt, mask, dict(split.fast), lr_mult=lr_mult(), backward_scale=1.0)
     assert got.backward_done
     assert torch.allclose(ref.loss, got.loss), "per-window backward must not change the loss"
     for p, g in zip(slow, g_ref, strict=True):
