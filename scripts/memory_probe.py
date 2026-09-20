@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--prefix-segment", type=int, default=0)
     ap.add_argument("--remat-group", type=int, default=0)
     ap.add_argument("--truncate-bptt", type=int, default=0)
+    ap.add_argument("--inference", action="store_true",
+                    help="measure the EVAL path (no meta-gradient) instead of training")
     ap.add_argument("--staged", action="store_true",
                     help="also run the grad-enabled staged measurements (they retain their graph)")
     a = ap.parse_args()
@@ -99,8 +101,10 @@ def main():
 
     torch.cuda.reset_peak_memory_stats()
     try:
-        out = loop.run_sequence(ids, tgt, mask, dict(split.fast), lr_scale=1.0,
-                                lr_mult=model.inner_lr_multipliers(), backward_scale=1.0)
+        out = loop.run_sequence(
+            ids, tgt, mask, dict(split.fast), lr_scale=1.0,
+            lr_mult=model.inner_lr_multipliers(),
+            backward_scale=None if a.inference else 1.0, inference=a.inference)
         print(f"full sequence fwd: loss={out.loss.item():.4f} "
               f"peak={gib(torch.cuda.max_memory_allocated()):.2f} GiB "
               f"backward_done={out.backward_done}", flush=True)
