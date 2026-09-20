@@ -488,11 +488,12 @@ WORSE (+0.05) and the beyond-window loss about 1.35 nats better.
 
 So the earlier description of arm C's gain over arm A as "adaptation to PG-19" was wrong.
 Adaptation to the domain would help inside the window too, and it does not. The working
-hypothesis, NOT yet verified, is that a Llama pretrained with full attention breaks under a
-sliding window once its earliest tokens leave the window, and that fine-tuning repairs this.
-The diagnostic is arm A at 32K with full attention (`--window 32768`); it was launched on
-the login node on 2026-09-20 as `A_32k_fullattn` (with `B_32k_fullattn`), and its result
-had not been read when this was written.
+hypothesis was that a Llama pretrained with full attention breaks under a sliding window
+once its earliest tokens leave the window, and that fine-tuning repairs this. The
+diagnostic, arm A at 32K with full attention (`--window 32768`), has since been run and
+CONFIRMS that the collapse is caused by the sliding window: see "The full-attention
+diagnostic" below. (Which property of the window breaks the model, for instance losing the
+first tokens as attention sinks, has not been tested.)
 
 ### What TTT-E2E's protocol says the baseline is
 
@@ -514,8 +515,9 @@ Consequences for reading the tables above:
   GPU at the measured 33 s per sequence. Not decided.
 - `--inner none` was checked to be bit-identical to `--inner-lr 0` on SmolLM2-135M (all 10
   steps and the evaluation, difference exactly 0), so longer controls can skip the double
-  backward. A real-hardware check at 32K (`C_32k_ctl_none10`, job 14195736) was submitted
-  and had not been read when this was written.
+  backward. On real hardware at 32K (`C_32k_ctl_none10`, job 14195736, against
+  `C_32k_ctl_lr0`): largest per-step loss difference 2.5e-4, i.e. the noise floor;
+  evaluation 2.71244 against 2.71249; and 68.7 against 131.3 seconds per step, 1.9x faster.
 
 ### AdamW as the inner optimizer at 32K (arm B, nothing trained)
 
@@ -526,12 +528,13 @@ beta1 = beta2 = 0.9, eps = 1e-8, warm start from the first chunk's gradient.
 | 1e-6 | 3.7021 | -0.0098 |
 | 2e-6 | 3.6858 | -0.0261 |
 | 4e-6 | 3.6597 | -0.0522 |
-| 7e-6 | pending | |
-| 2e-5 | pending | |
+| 7e-6 | 3.6369 | -0.0750 |
+| 2e-5 | 3.6175 | -0.0944 |
 
 Normalized SGD at the same per-element step (4e-6) reaches 3.5691, so at equal step size
-AdamW recovers about a third as much. The curve was still descending at 4e-6; its optimum
-is not yet located.
+AdamW recovers about a third as much. AdamW was still improving at 2e-5, the top of this
+grid, where normalized SGD already hurts (3.7788); its optimum is bracketed in the
+extension below.
 
 ### Checkpoint / resume on real hardware
 
@@ -546,9 +549,13 @@ resumed at step 4/10. Against the uninterrupted run `C_32k_q10` (job 14163396):
   6.69432), before any checkpoint existed. The two runs were on different nodes
   (della-l08g2, della-l07g2), so this is kernel nondeterminism. Losses stay identical
   through step 1 because the outer learning rate at step 0 is exactly 0.
-- The largest gradient-norm difference is 1.7% at step 8. Whether that is within the
-  run-to-run noise of two UNINTERRUPTED runs is being measured by `C_32k_q10_repeat` (job
-  14194873); that result had not been read when this was written.
+- The largest gradient-norm difference is 1.7% at step 8. That is within run-to-run noise:
+  `C_32k_q10_repeat` (job 14194873), a second UNINTERRUPTED run of the same configuration,
+  differs from the reference by up to 2.49e-4 in loss (mean 7.8e-5), by 1.2% in gradient
+  norm, also at step 8, and by 1.4e-4 in evaluation loss (2.66909 against 2.66895). The
+  killed-and-resumed run differs by LESS on loss (max 1.73e-4, mean 6.1e-5) and on
+  evaluation (3e-5). So two runs of this configuration agree to about 2.5e-4 nats, resumed
+  or not; differences of that size between runs carry no information.
 
 On CPU the same procedure through the real CLI is bit-identical (SmolLM2-135M, 10 steps x 8
 metrics and both evaluations per token).
