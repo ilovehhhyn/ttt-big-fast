@@ -120,15 +120,36 @@ def build_dataloader(
     num_workers: int = 2,
     rank: int = 0,
     world_size: int = 1,
+    start_sequence: int = 0,
 ) -> DataLoader:
     """Deterministic shard-by-rank loader; the last partial batch is dropped.
 
     Dropping it keeps every optimiser step made of exactly
     ``micro_batch * world_size`` sequences, which is what the token budget
     accounting in the training loop assumes.
+
+    ``start_sequence`` resumes an interrupted run. The training loop cycles this loader
+    forever, so sequence n of a run is
+
+        indices[n % N],   N = len(indices)
+
+    and a run that has consumed ``start_sequence`` sequences must continue with
+    indices[(start_sequence + j) % N] for j = 0, 1, ... Rotating the index list left by
+    ``start_sequence % N`` and cycling THAT gives exactly this stream:
+
+        rotated[j % N] = indices[(start_sequence + j % N) % N] = indices[(start_sequence + j) % N]
     """
     dataset = TokenSequenceDataset(path, split, seq_len)
     indices = _shard_indices(len(dataset), shuffle=shuffle, seed=seed, rank=rank, world_size=world_size)
+    assert start_sequence >= 0, f"start_sequence must be >= 0, got {start_sequence}"
+    if start_sequence > 0:
+        # With micro_batch > 1, drop_last discards a partial batch at every epoch
+        # boundary, so the cycled stream is no longer indices[n % N] and a rotation would
+        # not reproduce it. The inner loop requires micro_batch == 1 anyway.
+        assert micro_batch == 1, "start_sequence requires micro_batch == 1 (exact epoch boundary)"
+        assert len(indices) > 0, "cannot resume into an empty shard"
+        shift = start_sequence % len(indices)
+        indices = indices[shift:] + indices[:shift]
     shard = torch.utils.data.Subset(dataset, indices)
     # shuffle is already baked into `indices`, so the sampler stays sequential:
     # the order is a pure function of (seed, rank, world_size).

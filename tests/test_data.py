@@ -250,3 +250,42 @@ def test_bos_id_comes_from_the_tokenizer_not_a_constant(tmp_path):
     w.close()
     arr = np.fromfile(tmp_path / "train.bin", dtype=np.uint32)
     assert arr[0] == 7, f"writer used {arr[0]}, not the tokenizer's BOS"
+
+
+# ---------------------------------------------------------------------------
+# resume: start_sequence continues the SAME infinite stream
+# ---------------------------------------------------------------------------
+def _cycled(dl, n: int) -> list[list[int]]:
+    """First n sequences of the infinitely cycled loader, as run.py consumes it."""
+    out: list[list[int]] = []
+    while len(out) < n:
+        for b in dl:
+            out.extend(row.tolist() for row in b["input_ids"])
+    return out[:n]
+
+
+@pytest.mark.parametrize("start", [0, 1, 5, 7, 8, 9, 19])
+def test_start_sequence_continues_the_same_stream(tmp_path, start: int) -> None:
+    """A run resumed after consuming `start` sequences must see sequence start, start+1, ...
+
+    of the ORIGINAL stream -- neither replaying data it already trained on nor skipping
+    any. The cases cover mid-epoch (1, 5), the last item (7), exactly one epoch (8), just
+    past it (9) and more than two epochs (19), since run.py cycles the loader forever.
+    """
+    _write_stream(tmp_path, "train", num_tokens=33)  # 8 items of seq_len 4
+    take = 20
+
+    def loader(s: int):
+        return build_dataloader(tmp_path, "train", 4, 1, shuffle=True, seed=3,
+                                num_workers=0, start_sequence=s)
+
+    uninterrupted = _cycled(loader(0), start + take)
+    assert _cycled(loader(start), take) == uninterrupted[start:], f"stream diverges at start={start}"
+
+
+def test_start_sequence_requires_micro_batch_one(tmp_path) -> None:
+    """With micro_batch > 1 the dropped partial batch makes the epoch boundary inexact,
+    so an offset stream would no longer be a suffix of the original one."""
+    _write_stream(tmp_path, "train", num_tokens=33)
+    with pytest.raises(AssertionError, match="micro_batch == 1"):
+        build_dataloader(tmp_path, "train", 4, 3, shuffle=True, seed=0, num_workers=0, start_sequence=2)

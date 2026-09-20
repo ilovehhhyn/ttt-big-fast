@@ -36,6 +36,7 @@ from ttt.model.naming import split_parameters
 from ttt.model.transformer import TTTTransformer
 from ttt.optim.inner import build_inner_optimizer
 from ttt.optim.outer import build_outer_optimizer
+from ttt.train.checkpoint import load_checkpoint, save_checkpoint, training_fingerprint
 from ttt.train.inner_loop import TTTInnerLoop
 from ttt.train.trainer import Trainer
 from ttt.utils.hf_import import MIRROR_REPO, build_llama_ttt
@@ -169,6 +170,9 @@ def main() -> None:
     p.add_argument("--lora-targets", default="wq,wk,wv,wo,w1,w2,w3",
                    help="w1,w2,w3 put LoRA on the fast MLPs, meta-learning a rank-r shift "
                         "of the fast-weight initialisation W0")
+    p.add_argument("--ckpt", default=None,
+                   help="checkpoint file, written after every step and resumed from if it exists "
+                        "(default: --out with a .ckpt suffix, so every training run is resumable)")
     p.add_argument("--eval-ttt-off", action="store_true",
                    help="also evaluate the SAME trained weights with the inner loop off, "
                         "isolating what test-time training contributes at inference")
@@ -188,15 +192,36 @@ def main() -> None:
 
     if args.mode == "train":
         opt = build_outer_optimizer(split.slow, cfg.outer)
+        # Resume. A job can die at any moment (wall limit, node failure), and on this
+        # cluster a resubmission waits days, so every completed step is checkpointed and a
+        # restart continues exactly where it stopped (see ttt/train/checkpoint.py).
+        start_step, history = 0, []
+        fingerprint = training_fingerprint(vars(args))
+        # Resumable BY DEFAULT: the path is derived from --out, so a run is recoverable
+        # even when nobody thought to ask for it. A leftover checkpoint from a different
+        # experiment at the same --out is rejected by the fingerprint check, not resumed.
+        ckpt = Path(args.ckpt) if args.ckpt else Path(args.out).with_suffix(".ckpt")
+        assert ckpt != Path(args.out), f"--ckpt and --out must differ, both are {ckpt}"
+        if ckpt.exists():
+            start_step, history = load_checkpoint(ckpt, split=split, optimizer=opt,
+                                                  fingerprint=fingerprint)
+            assert 0 <= start_step <= args.steps, f"checkpoint step {start_step} outside [0, {args.steps}]"
+            assert len(history) == start_step, f"{len(history)} logged steps for checkpoint step {start_step}"
+            print(f"[resume] {ckpt}: continuing at step {start_step}/{args.steps}", flush=True)
+        result["resumed_from_step"] = start_step
+        # Sequences already consumed = steps done * sequences per step; the loader
+        # continues the same stream from there.
         train_loader = build_dataloader(Path(args.data), "train", args.seq_len, 1,
-                                        shuffle=True, seed=args.seed, num_workers=2)
+                                        shuffle=True, seed=args.seed, num_workers=2,
+                                        start_sequence=start_step * cfg.train.seqs_per_step)
         it = iter(_cycle(train_loader))
         trainer = Trainer(cfg, model, split, loop, opt, it, device=device,
                           empty_cache=args.empty_cache)
-        history = []
-        for step in range(args.steps):
+        for step in range(start_step, args.steps):
             m = trainer.train_step(step)
             history.append(m.as_log())
+            save_checkpoint(ckpt, step=step + 1, split=split, optimizer=opt,
+                            history=history, fingerprint=fingerprint)
             if step % 5 == 0 or step == args.steps - 1:
                 print(f"[train] {m.as_log()}", flush=True)
         result["history"] = history
