@@ -115,3 +115,17 @@ def test_arm_f_refuses_to_run_until_it_is_implemented():
     assert ARMS["F"] == ARMS["C"], "arm F now differs from C: replace this guard with a real test"
     with pytest.raises(AssertionError, match="arm F is not implemented"):
         build_everything(SimpleNamespace(arm="F", device="cpu"))
+
+
+def test_inner_lr_has_no_default_when_an_inner_optimizer_is_active():
+    """The CLI default used to be 1e-3, the value that drives the loss to 20.2. A forgotten
+    flag must fail at once, not run a divergent configuration for hours."""
+    from ttt.run import resolve_inner_lr
+
+    with pytest.raises(AssertionError, match="--inner-lr is required"):
+        resolve_inner_lr("normalized_sgd", None)
+    with pytest.raises(AssertionError, match="--inner-lr is required"):
+        resolve_inner_lr("adamw", None)
+    assert resolve_inner_lr("normalized_sgd", 4e-6) == 4e-6
+    assert resolve_inner_lr("normalized_sgd", 0.0) == 0.0     # an explicit zero is a real setting
+    assert resolve_inner_lr("none", None) == 0.0              # arm A: no inner optimizer, nothing to set

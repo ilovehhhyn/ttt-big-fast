@@ -64,6 +64,21 @@ ARMS = {
 }
 
 
+def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
+    """The inner step size, or a hard error if an active inner optimizer was given none.
+
+    A default would be a trap: the only value that was ever the default (1e-3) diverges.
+    With no inner optimizer the value is irrelevant and 0.0 is returned.
+    """
+    if optimizer == "none":
+        return 0.0
+    assert inner_lr is not None, (
+        f"--inner-lr is required with --inner {optimizer}: there is no safe default. The unit is "
+        "1/sqrt(n_fast) = 7.05e-5 for the 201M-parameter fast set; the measured 32K optimum is 4e-6."
+    )
+    return inner_lr
+
+
 def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoop, torch.device]:
     # Arm F is the paper-layout control: the pretrained MLP is kept static as safe storage
     # and a separate prime MLP carries the fast weights (plan section 0.1, Task 7). That model
@@ -91,8 +106,9 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     model.remat_blocks = args.remat_blocks
     model = model.to(device)
 
-    inner = InnerConfig(optimizer=arm["inner"] if args.inner is None else args.inner,
-                        lr_rms=args.inner_lr, norm_scope=args.norm_scope,
+    optimizer = arm["inner"] if args.inner is None else args.inner
+    inner = InnerConfig(optimizer=optimizer,
+                        lr_rms=resolve_inner_lr(optimizer, args.inner_lr), norm_scope=args.norm_scope,
                         eps=args.adam_eps, clip_tau=args.clip_tau, beta1=0.9, beta2=0.9, warm_start=True,
                         learned_lr=bool(arm["slow"]) and "inner_lr_log" in arm["slow"],
                         delta_decay=args.delta_decay)
@@ -124,7 +140,8 @@ def _build_arm_e(args, arm, device):
     assert not unexpected, f"checkpoint has {len(unexpected)} unexpected tensors: {unexpected[:5]}"
     model = model.to(device)
 
-    inner = InnerConfig(optimizer=args.inner or arm["inner"], lr_rms=args.inner_lr,
+    inner = InnerConfig(optimizer=args.inner or arm["inner"],
+                        lr_rms=resolve_inner_lr(args.inner or arm["inner"], args.inner_lr),
                         clip_tau=args.clip_tau, learned_lr=False)
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
@@ -169,7 +186,11 @@ def main() -> None:
     p.add_argument("--steps", type=int, default=250)
     p.add_argument("--inner", default=None,
                    choices=[None, "none", "normalized_sgd", "adamw", "muon", "clipped_sgd"])
-    p.add_argument("--inner-lr", type=float, default=1e-3)
+    p.add_argument("--inner-lr", type=float, default=None,
+                   help="per-element RMS of the inner step. REQUIRED whenever an inner optimizer is "
+                        "active: there is no safe default. The unit is 1/sqrt(n_fast) (7.05e-5 for the "
+                        "201M-parameter fast set); the measured 32K optimum is 4e-6. The old default, "
+                        "1e-3, is 14x the unit and drives the loss to 20.2.")
     p.add_argument("--norm-scope", default="tensor", choices=["tensor", "global"])
     p.add_argument("--adam-eps", type=float, default=1e-8)
     p.add_argument("--clip-tau", type=float, default=1.0)
