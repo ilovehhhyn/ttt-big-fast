@@ -538,3 +538,40 @@ resumed at step 4/10. Against the uninterrupted run `C_32k_q10` (job 14163396):
 
 On CPU the same procedure through the real CLI is bit-identical (SmolLM2-135M, 10 steps x 8
 metrics and both evaluations per token).
+
+## Runs in flight (as last observed 2026-09-20, about 14:25 ET)
+
+On 2026-09-20 `sbatch --test-only` estimated a start of 2026-09-24 for any job longer than
+61 minutes; jobs of at most 61 minutes (`--qos=gpu-test`) start within minutes. All long
+jobs below are pending, constrained to 80 GiB GPUs, and resumable (checkpoint after every
+step, path derived from `--out`). All are arm C at 32K (PG-19, k = 8192, b = 1024,
+`fast_blocks=4`, normalized SGD 4e-6, outer lr 4e-4, LoRA r = 64, `truncate_bptt=2` unless
+noted) and evaluate the same 32 validation sequences with the inner loop on and off.
+
+| job | name | what it varies | purpose |
+|---|---|---|---|
+| 14163397 | C32k_t2 | 20 steps, 4 seq/step | the properly warmed-up arm C number |
+| 14163398 | C32k_t1 | same, `truncate_bptt=1` | how much the truncation window matters |
+| 14165376 | C32k_ctl20 | same as t2 with `--inner-lr 0` | budget-matched extension-only baseline |
+| 14169727 | C32k_s60 | 60 steps | step ladder: is arm C undertrained? |
+| 14169728 | C32k_s150 | 150 steps | step ladder |
+| 14167119 | C32k_bs8 | 8 seq/step, 20 steps | batch ladder: is the meta-gradient noise-limited? |
+| 14167120 | C32k_bs16 | 16 seq/step, 20 steps | batch ladder |
+| 14167121 | C32k_bs32 | 32 seq/step, 20 steps | batch ladder; matches the reference batch (1,048,576 tokens) |
+| 14169729 | C32k_bs32s60 | 32 seq/step, 60 steps | closest approach to the reference regime (63M tokens) |
+
+The batch ladder holds steps fixed, so larger batches also see more tokens; it measures
+"more compute per step", not batch size in isolation. The 60- and 150-step runs do not yet
+have budget-matched `--inner none` controls queued.
+
+Short runs whose results exist on the cluster but had not been read when this was written
+(the SSH session dropped): `C_32k_q10_repeat` (noise floor, job 14194873),
+`C_32k_ctl_none10` (job 14195736), and the login-node evaluations `B_32k_adamw_lr7e-6`,
+`B_32k_adamw_lr2e-5`, `A_32k_fullattn`, `B_32k_fullattn`, plus an arm D (full-slow) memory
+probe at 32K (`logs/login_armD_probe_32k.log`).
+
+Not started: arm D training (whether it fits one 80 GiB GPU at 32K is what the probe
+measures), arm F (not implemented on the Llama path; `--arm F` now refuses to run), the
+forgetting probe on the real model (wired into the CLI as `--forgetting-probe-tokens`,
+exercised only on SmolLM2-135M), the decay-toward-W0 sweep, the LoRA rank sweep, Muon, and
+multiple seeds.
