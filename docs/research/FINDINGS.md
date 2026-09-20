@@ -338,3 +338,45 @@ with the differing setting named.
 15 minutes, silently. A batch A100 ran this workload 2.1x slower than the login node's
 H100, so jobs must be sized from batch-node timings. `gpu-test` (61 minutes, 3 jobs,
 priority 8000) starts within minutes and is used here for short validation runs only.
+
+## 15. What arm B's gain actually is: the sliding window breaks the un-tuned model (2026-09-20)
+
+**The measurement.** Arm A (nothing trained, no TTT) at 32K on PG-19, by 8K band:
+2.3279 / 4.2052 / 4.1841 / 4.1308 with the sliding window (k = 8192), against
+2.3279 / 2.3119 / 2.2792 / 2.3183 with full attention (`--window 32768`). The first band is
+identical to four decimals, as it must be: inside the window the two are the same
+computation. Beyond it the windowed model is about 1.85 nats worse than the SAME weights
+with full attention. TTT on top of full attention does nothing (2.3105 against 2.3092), the
+T/k = 1 behaviour. At T = 8192 on PG-19 (T/k = 1, 128 sequences from 50 books, normalized
+SGD 4e-6) TTT is slightly but significantly harmful: -0.0016 nats per book, 95% CI
+[-0.0020, -0.0011], positive in 6 of 50 books.
+
+**What it means.** The un-tuned model's collapse beyond the window is caused by the window,
+not by missing information: a Llama pretrained with full attention does not function when
+its attention is cut to the last 8192 tokens. Which property breaks it (for instance losing
+the first tokens, which such models use as attention sinks) has not been tested.
+
+**Consequence for every arm B number.** Arm B's gain (+0.1405 nats per book) sits entirely
+beyond the window. That was read as the signature of fast weights acting as a compressed
+memory of out-of-window context. It is equally the signature of fast weights compensating
+for a broken model, because the breakage also exists only beyond the window. The position
+signature is necessary for the memory reading and does not distinguish it from the repair
+reading. What distinguishes them is how much the out-of-window context is worth to a
+healthy model: `scripts/context_value.py` measures that directly (section 16 of
+`docs/results/results.md` once read). If it is worth a few hundredths of a nat, then nearly
+all of arm B's 0.14 is repair.
+
+**Consequence for arm C.** After 10 steps of extension training the no-TTT control still
+scores about 2.83 beyond the window against roughly 2.30 for a healthy model, so those
+models are still mostly broken there, and the +0.0248 same-weights gain from TTT cannot be
+attributed to memory either. The thesis can only be tested against a baseline that has been
+extension-trained until its beyond-window loss reaches the healthy level, which is also
+what the reference protocol does (725 steps at 32 sequences per step).
+
+**Two arms could not have run.** Arm F was a copy of arm C's configuration (now refuses to
+run). Arm D's slow set was EMPTY: `slow_spec=("**",)` was matched as a substring, and "**"
+occurs in no parameter name. It is now a wildcard for every non-fast parameter, tested on
+the split and with a real training step under per-window truncated BPTT. In this arm the
+fast weights' initialisation W0 is not trained (the split is disjoint and the outer
+optimizer owns only the slow set), and no weight decay is applied (decay is defined on the
+LoRA factors only). H1's falsifier needs arm D; it has never been trained.
