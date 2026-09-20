@@ -6,6 +6,8 @@ defaults that change behaviour: an invalid combination raises immediately.
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -158,7 +160,36 @@ class OuterConfig:
 
     def __post_init__(self) -> None:
         assert self.lr >= 0.0 and self.total_steps >= 1
-        assert 0.0 <= self.warmup_frac < 1.0
+        # Fail here, not inside the training loop: a warmup that rounds to zero is a
+        # silent change of schedule (see resolve_warmup).
+        resolve_warmup(self.warmup_frac, self.total_steps, "warmup_frac")
+
+
+def resolve_warmup(frac: float, total_steps: int, name: str) -> int:
+    """Warmup length in STEPS, or a hard error if the configuration cannot deliver one.
+
+        W = round(frac * total_steps)
+
+    A configured warmup (frac > 0) that rounds to W = 0 is a BUG, not a no-op: it
+    silently changes the optimisation schedule, so two runs that differ only in
+    total_steps are no longer comparable. At total_steps=3 with frac=0.1 both the outer
+    and the inner warmup vanished this way, and the run looked normal. Fail loudly
+    instead; frac=0 remains the explicit way to ask for no warmup.
+    """
+    assert 0.0 <= frac < 1.0, f"{name} must be in [0, 1), got {frac}"
+    assert total_steps >= 1, f"total_steps must be >= 1, got {total_steps}"
+    if frac == 0.0:
+        return 0
+    warmup = round(frac * total_steps)
+    assert warmup >= 1, (
+        f"{name}={frac} over total_steps={total_steps} rounds to a 0-step warmup. "
+        f"Use total_steps >= {math.ceil(0.5 / frac)}, or set {name}=0 to disable warmup "
+        f"on purpose."
+    )
+    assert warmup < total_steps, (
+        f"{name}={frac} gives warmup {warmup} >= total_steps {total_steps}"
+    )
+    return warmup
 
 
 @dataclass(frozen=True)
@@ -204,6 +235,9 @@ class Config:
         assert self.train.seq_len % self.model.chunk_size == 0, (
             f"seq_len {self.train.seq_len} must be divisible by chunk_size {self.model.chunk_size}"
         )
+        # The inner-LR warmup is a fraction of the OUTER step count, so only Config can
+        # check it. Same rule as warmup_frac: rounding to zero is an error, not a skip.
+        resolve_warmup(self.inner.lr_warmup_frac, self.outer.total_steps, "lr_warmup_frac")
 
     @property
     def num_chunks(self) -> int:

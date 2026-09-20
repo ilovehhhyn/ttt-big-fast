@@ -20,6 +20,8 @@ Usage:
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import argparse
 import json
 import time
@@ -117,7 +119,12 @@ def _build_arm_e(args, arm, device):
                         prefix_segment=args.prefix_segment,
                         truncate_bptt=args.truncate_bptt,
                         slow_spec=("__none__",), dtype=args.dtype)
-    cfg = Config(model=mcfg, inner=inner, outer=OuterConfig(lr=0.0, total_steps=1), train=train)
+    # Eval-only: there is no training, so there is no warmup to schedule. Say so
+    # explicitly -- the default fracs over total_steps=1 round to a 0-step warmup,
+    # which is now (correctly) a hard error.
+    inner = replace(inner, lr_warmup_frac=0.0)
+    cfg = Config(model=mcfg, inner=inner,
+                 outer=OuterConfig(lr=0.0, total_steps=1, warmup_frac=0.0), train=train)
     split = split_parameters(model, mcfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
     return cfg, model, split, loop, device

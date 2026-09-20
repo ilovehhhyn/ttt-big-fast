@@ -226,15 +226,20 @@ class TTTInnerLoop:
             opt_state = unflatten_state(tuple(t.detach() for t in st_t), st_tmpl)
         return fast, opt_state, caches, loss, token_nll
 
-    def _first_grad(self, prefix_out, targets, loss_mask, fast, caches) -> dict[str, Tensor]:
-        """g_1 = d l_1 / d W_0, used only to seed AdamW's moments."""
+    def _first_grad(self, prefix_out, targets, loss_mask, fast, caches, create_graph: bool) -> dict[str, Tensor]:
+        """g_1 = d l_1 / d W_0, used only to seed AdamW's moments.
+
+        `create_graph` must follow the caller: at inference this seed feeds no
+        meta-gradient, and building a graph for it would pin a full chunk's activations
+        for the whole sequence.
+        """
         keys = self._fast_keys(fast)
         with self._autocast(prefix_out.device.type):
             logits, _ = self.model.suffix_forward(
                 prefix_out[:, : self.chunk_size], fast=fast, caches=caches, chunk_index=0
             )
         loss, _ = masked_cross_entropy(logits, targets[:, : self.chunk_size], loss_mask[:, : self.chunk_size])
-        grads = torch.autograd.grad(loss, [fast[k] for k in keys], create_graph=True)
+        grads = torch.autograd.grad(loss, [fast[k] for k in keys], create_graph=create_graph)
         return dict(zip(keys, grads, strict=True))
 
     # -------------------------------------------------------------- sequence
@@ -291,12 +296,27 @@ class TTTInnerLoop:
         keys = self._fast_keys(fast)
         n_cache_t = 2 * self.cfg.model.fast_blocks
 
+        trunc = self.cfg.train.truncate_bptt
+        # Truncation only bounds memory if the window's graph is actually RELEASED at the
+        # boundary. Detaching the carry alone does not do that: every chunk loss feeds the
+        # final mean, so the whole chain stays reachable until the outer backward. So when
+        # a backward_scale is supplied we differentiate each window as it closes.
+        per_window = trunc > 0 and backward_scale is not None
+        # Cut the prefix out of every window's graph. Without this each window has to
+        # backprop through the shared (checkpointed) prefix, recomputing it once per
+        # window -- N/trunc prefix forwards per sequence. With it, each window's backward
+        # stops at this leaf and the prefix is differentiated exactly once, at the end.
+        # Everything downstream (including AdamW's warm-start gradient) must read the
+        # leaf, never prefix_out, or the cut leaks and the first backward frees the
+        # prefix graph that later windows still need.
+        prefix_leaf = prefix_out.detach().requires_grad_(True) if per_window else prefix_out
+
         # Seed the inner-optimizer state BEFORE the checkpointed loop so the region is
         # a pure function of its inputs. AdamW's warm start needs g_1, which costs one
         # extra forward+grad on chunk 0 (~1/N of the sequence); every other optimizer
         # is stateless or state-independent of the data.
         if self.inner_opt.needs_first_grad:
-            opt_state = self.inner_opt.init_state(fast, first_grad=self._first_grad(prefix_out, targets, loss_mask, fast, caches))
+            opt_state = self.inner_opt.init_state(fast, first_grad=self._first_grad(prefix_leaf, targets, loss_mask, fast, caches, create_graph))
         else:
             opt_state = self.inner_opt.init_state(fast)
         state_tensors, state_template = flatten_state(opt_state)
@@ -320,7 +340,7 @@ class TTTInnerLoop:
                 sl = slice(idx * self.chunk_size, (idx + 1) * self.chunk_size)
                 f, st, c, loss_i, nll_i = self._chunk_step(
                     f, fast0, st, c,
-                    prefix_out[:, sl], targets[:, sl], loss_mask[:, sl],
+                    prefix_leaf[:, sl], targets[:, sl], loss_mask[:, sl],
                     idx, lr_scale, lr_mult, create_graph,
                 )
                 losses.append(loss_i)
@@ -330,21 +350,20 @@ class TTTInnerLoop:
                     torch.stack(losses), torch.cat(nlls, dim=-1))
 
         flat = (*[fast[k] for k in keys], *state_tensors, *self.model.flatten_caches(caches))
-        trunc = self.cfg.train.truncate_bptt
         # Truncation only bounds memory if the window's graph is actually RELEASED at the
         # boundary. Detaching the carry alone does not do that: every chunk loss feeds the
         # final mean, so the whole chain stays reachable until the outer backward. So when
         # a backward_scale is supplied we differentiate each window as soon as it closes
         # and drop its losses, making peak memory O(trunc) instead of O(N).
-        per_window = trunc > 0 and backward_scale is not None
         window_losses: list[Tensor] = []
 
         def close_window():
-            # L = (1/N) sum_i l_i, so this window contributes sum(window)/N. retain_graph
-            # is required because prefix_out is shared by every window: its (checkpointed)
-            # graph must survive to serve the windows that follow.
+            # L = (1/N) sum_i l_i, so this window contributes sum(window)/N. The window's
+            # graph is freed here (no retain_graph): the prefix is NOT part of it, because
+            # the chunks read `prefix_leaf`, a detached leaf. dL/d(prefix) accumulates in
+            # prefix_leaf.grad and is pushed through the real prefix once, after the loop.
             w = torch.cat(window_losses).sum() / self.num_chunks
-            (w * backward_scale).backward(retain_graph=True)
+            (w * backward_scale).backward()
             chunk_losses.append(torch.cat(window_losses).detach())
             window_losses.clear()
 
@@ -383,6 +402,10 @@ class TTTInnerLoop:
         if per_window and window_losses:
             # A ragged tail (num_chunks not a multiple of trunc) still has to be charged.
             close_window()
+        if per_window and prefix_leaf.grad is not None and prefix_out.requires_grad:
+            # One backward through the prefix, carrying the gradient every window
+            # accumulated at the cut. backward_scale is already folded into it.
+            prefix_out.backward(prefix_leaf.grad)
 
         fast_final = dict(zip(keys, flat[: len(keys)], strict=True))
         per_chunk = torch.cat(chunk_losses)
