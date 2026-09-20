@@ -255,3 +255,77 @@ each window's double backward, roughly independent of sequence length - which is
 optimises a biased objective (PERK, arXiv:2507.06415, accepts the same bias). Arms A and B
 are unaffected: they need no meta-gradient, and evaluation is forward-only, so eval numbers
 remain directly comparable across arms.
+
+## 14. Cross-check against the reference implementation, and robustness fixes (2026-09-19/20)
+
+The reference repository (github.com/test-time-training/e2e) is cloned at
+`/scratch/gpfs/ARORA/hh9077/e2e` for lookup. It is a reference, not a template: fast-weight
+size, the LoRA slow set and `fast_blocks` differ on purpose. Its real settings live in
+`configs/experiment/<size>/{pretrain,extension}/*.yaml`; the dataclass defaults in
+`ttt/config.py` (window 1024, Llama-2 tokenizer, vocabulary 32000) are NOT what they ran.
+
+**What it confirms.** `ext-760m-e2e-32K.yaml` uses `seq_length: 32768`,
+`sliding_window_size: 8192`, `mini_batch_size: 1024`, `rope_theta: 500000`, `prime: True`,
+`suffix_len: 6`, `intermediate_size: 3328` - the protocol used here and the architecture
+`e2e_760m_config()` builds. The inner loop computes the loss with `value_and_grad` and only
+then applies the update (loss before update, Eq. 6), and calls
+`suffix_call(prefix_outputs=...)`, the same prefix/suffix split. The loss is
+`jax.nn.log_softmax`, so their numbers are nats too.
+
+**The inner-LR unit, confirmed independently.** `optimizer_inner` is
+`clip_by_global_norm(1.0)` followed by `sgd(lr=1)`: every inner update has global norm
+exactly 1, whatever the gradient scale. In this codebase's per-element RMS
+parameterisation a unit-norm step over n_fast elements is `1/sqrt(n_fast)` = 7.05e-5 for
+n_fast = 201,326,592. That is the value inferred in section 11 after the 14x-too-large
+bug; it is now confirmed from their config rather than inferred. The 32K optimum here is
+4e-6, 0.057x theirs. Their W_0 is meta-learned from scratch to be updated; ours is a
+pretrained Llama that was never trained to receive fast-weight updates.
+
+**Deliberate deviations, now explicit.**
+- `ilr_init`: they use 1 (no inner-LR warmup); we ramp 0.1 -> 1. This was a literal inside
+  the schedule and is now `InnerConfig.ilr_init`, default unchanged.
+- Batch: they use 32 sequences per step (1,048,576 tokens); the first arm C runs use 4.
+  Batch size here is pure gradient accumulation (`micro_batch` must be 1 because fast
+  weights are per-sequence), so matching theirs costs time, not memory.
+- Data: Books3 there, PG-19 here, because the data must be free.
+
+**Robustness defects found and fixed.** Each is a way a run can look normal and be wrong.
+1. *A warmup that rounds to zero was skipped silently.* `round(0.1 * 3) = 0`, and the two
+   schedules dropped their warmup by two different paths. `resolve_warmup` now raises, at
+   config construction; `frac = 0` is the explicit way to disable warmup.
+2. *Evaluation built a meta-gradient it never used.* `run_sequence` always ran
+   `create_graph=True`, so a 32K evaluation held O(num_chunks) second-order graph and ran
+   out of memory. `inference=True` skips it, bypasses the checkpointed regions (with no
+   backward to trigger recomputation their saved inputs pinned a 0.81 GiB fast-weight set
+   per chunk) and runs the prefix under `no_grad`. It is value-identical to the training
+   path. 32K evaluation went from out-of-memory to a flat 5.9 GiB, 11.5 GiB peak.
+3. *Any non-leaf tensor shared by every truncation window is freed by the first window's
+   backward.* This hit twice: the prefix output, and `exp(inner_lr_log)`. Both are now cut
+   at a detached leaf whose `.grad` accumulates across windows and is pushed through the
+   original graph once at the end. For the prefix this also removed N/truncate_bptt prefix
+   recomputations per sequence: 455.8 -> 131.9 s/step. A differentiable `lr_scale` would
+   fail the same way and is rejected. Everything else shared across windows was enumerated
+   and is either a leaf or travels in the detached carry.
+4. *The tests could not see (3)* because every fixture used `learned_lr=False`. The
+   per-window tests are parametrised over optimizer x learned_lr, and were checked to fail
+   with the cluster's exact error when each fix is removed.
+5. *No run could survive being killed.* See below.
+
+**Checkpoint / resume.** `sbatch --test-only` on 2026-09-20 estimated a start about five
+days out for any job over 61 minutes, so a run that dies costs a week. Every completed
+outer step is now checkpointed atomically and a restart continues exactly where it
+stopped; the path defaults to `--out` with a `.ckpt` suffix, which also covers jobs that
+were already queued, since their arguments are frozen but they run the code on disk when
+they start. Exactness needs only the slow weights, AdamW's moments, the step, the history
+and the data position, because fast weights reset per sequence and the training path has
+no randomness. The data position is recomputed rather than stored: sequence n of a run is
+`indices[n % N]`, so rotating the index list by `step * seqs_per_step` reproduces the
+cycled stream. Through the real CLI, a run killed with SIGKILL and resumed is bit-identical
+to an uninterrupted one on CPU (10 steps x 8 metrics, and both evaluations per token); a
+kill during evaluation resumes at step N/N; a resume under a changed setting is refused
+with the differing setting named.
+
+**Cluster facts that shaped the runs.** The login node kills a GPU process after roughly
+15 minutes, silently. A batch A100 ran this workload 2.1x slower than the login node's
+H100, so jobs must be sized from batch-node timings. `gpu-test` (61 minutes, 3 jobs,
+priority 8000) starts within minutes and is used here for short validation runs only.

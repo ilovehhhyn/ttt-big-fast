@@ -160,6 +160,13 @@ head dimension to `(..., d/2, 2)` and multiplies as a complex number, pairing ch
 trained under one convention is mis-rotated under the other. Arms A-D keep the halves
 convention and their HF logits parity is unaffected (correlation 1.000000).
 
+Units are comparable with arms A-D. Every model config in the reference repository sets
+`vocab_size: 128256` and its README describes the datasets as Llama-3 tokenized, so arm E
+uses the same tokenizer as Llama-3.2-1B and its nats per token measure the same thing. (The
+`Llama-2-7b-hf` tokenizer and 32000 vocabulary in their `ttt/config.py` are dataclass
+defaults that the experiment YAMLs override.) Their loss is `jax.nn.log_softmax`, natural
+log, with logits upcast to float32 first, matching `masked_cross_entropy` here.
+
 Arm E is a 760M model and arm A is a 1.24B model, so the gap between 3.07 and 2.49 is
 mostly capacity and pretraining budget, not method. Arm E is a reference point for what the
 published recipe produces, not a parameter-matched comparison.
@@ -356,3 +363,85 @@ The 8K row is a different dataset (DCLM rather than PG-19) because 8K is the pre
 stage in the paper's protocol, so its absolute loss is not comparable to the other two rows.
 Its sign is what matters: at T/k = 1 the window is not a bottleneck, sliding-window
 attention is full attention, and TTT can only add noise.
+
+## Arm C at 32K: the first run, and what test-time training contributes
+
+Arm C could not run at 32K until 2026-09-19 (every attempt ran out of memory; the fixes
+are in FINDINGS section 13). Configuration: PG-19, T = 32768, k = 8192, b = 1024,
+`fast_blocks=4`, normalized SGD at `lr_rms = 4e-6`, LoRA r = 64, outer lr 4e-4,
+131,072 tokens per step (4 sequences), `truncate_bptt=2`, evaluated on the same 32
+shuffled validation sequences as arms A and B. Loss is nats per token.
+
+| run | training | inner loop at eval | loss |
+|---|---|---|---|
+| arm A | none | off | 3.7119 |
+| arm B | none | on | 3.5694 |
+| plain LoRA fine-tune (`--inner-lr 0`) | 10 steps | off | 2.7125 |
+| **arm C** | 10 steps, through the inner loop | on | **2.6690** |
+
+### What the `--inner-lr 0` run is, and is not
+
+It is tempting to read the table as "0.999 nats from LoRA, 0.044 from TTT". That reading is
+wrong, and the reason is the design itself. The LoRA is not a fine-tuning baseline with
+test-time training added on top: it IS the slow weight set, and it is meta-learned through
+the inner loop so that the large fast-weight updates become useful. With the inner loop
+disabled, `W_i = W_0` for every chunk, the meta-gradient collapses to ordinary next-token
+loss, and the run learns a different, plainly fine-tuned LoRA. The two runs do not share
+slow weights, so nothing can be subtracted.
+
+What the pair does establish is a system-level comparison: at an equal budget of 10 steps,
+the full method beats plain LoRA fine-tuning by 0.044 nats. It also shows that most of the
+distance from arm A is adaptation to PG-19 rather than anything specific to this method,
+which is the honest context for the headline number.
+
+### Same weights, inner loop on and off
+
+The comparison that isolates test-time training holds the trained slow weights fixed and
+switches only the inner loop (`--eval-ttt-off`: a second evaluation in the same process
+with `lr_rms = 0`). Run `C_32k_abl`, 8 training steps:
+
+| inner loop at eval | loss |
+|---|---|
+| on | 2.7099 |
+| off, identical weights | 2.7370 |
+| **difference** | **+0.0272 nats** (2.8% perplexity) |
+
+Paired over the 32 evaluation sequences: mean +0.0272, sd 0.0145, se 0.0026, t = 10.6,
+95% CI [+0.0220, +0.0324]. Test-time training helps on 32 of 32 sequences (smallest
++0.0111, largest +0.0724).
+
+By position, with the 8192-token window marked:
+
+| token positions | inner loop on | off | difference |
+|---|---|---|---|
+| 0 - 8K (inside the window) | 2.3788 | 2.3849 | +0.0061 |
+| 8K - 16K | 2.8353 | 2.8538 | +0.0185 |
+| 16K - 24K | 2.8122 | 2.8519 | +0.0396 |
+| 24K - 32K | 2.8135 | 2.8580 | +0.0444 |
+
+The gain grows monotonically with distance past the attention window, which is what fast
+weights acting as a compressed memory of out-of-window context should look like. Arm B,
+which has no LoRA at all, shows the same shape.
+
+The small positive difference inside the window (+0.0061) is worth a note. Between the two
+separately trained runs above that band differed by -0.0006, i.e. nothing. Slow weights
+trained through the inner loop are slightly worse when it is switched off, which would be
+expected if they had specialised toward steering the fast-weight updates. At 0.006 nats
+this is suggestive only.
+
+### Caveats
+
+- **Short training.** 8 to 10 outer steps. Step ladders (20, 60, 150) and a batch ladder
+  (8, 16, 32 sequences per step) are queued; each carries the same on/off evaluation.
+- **Truncated meta-gradient.** `truncate_bptt=2` means the meta-gradient spans 2 inner
+  steps out of 32. It is what makes 32K fit on one 80 GiB card, and it is a biased
+  estimator (PERK, arXiv:2507.06415, accepts the same bias). A `truncate_bptt=1` run is
+  queued to measure how much the window length matters.
+- **The 32 sequences are not independent documents.** PG-19's validation split has about
+  50 books, so several sequences can come from one book and the interval above is somewhat
+  too narrow. With 32 of 32 positive this does not threaten the sign.
+- **Budget versus the paper.** TTT-E2E's 760M 32K extension uses 32 sequences per step
+  (1,048,576 tokens) for far more steps than this, and Books3 where we use PG-19 (the free
+  alternative). These numbers are not comparable to their published tables.
+- **`peak_gib` in the result files is the training peak**, not the evaluation peak: it is
+  read once at the end of the process. Evaluation at 32K peaks at 11.5 GiB.
