@@ -93,6 +93,12 @@ def is_fast_param(name: str, cfg: ModelConfig) -> bool:
     return name.endswith(fast_suffixes(cfg))
 
 
+# slow_spec=("**",) selects every non-fast parameter (arm D, the full-slow upper bound).
+# It is a wildcard, not a substring: "**" occurs in no parameter name, and treating it as
+# one silently produced an EMPTY slow set.
+FULL_SLOW = "**"
+
+
 def is_slow_param(name: str, train_cfg: TrainConfig) -> bool:
     """True iff ``name`` contains any entry of ``train_cfg.slow_spec`` as a substring.
 
@@ -101,6 +107,10 @@ def is_slow_param(name: str, train_cfg: TrainConfig) -> bool:
     ``blocks.3.seq_norm.weight``, ``blocks.3.mlp_norm.weight`` and ``final_norm.weight``
     alike.
     """
+    if train_cfg.slow_spec == (FULL_SLOW,):
+        # Arm D: every parameter is a candidate. split_parameters gives the fast rule
+        # precedence, so this means "everything the inner loop does not own".
+        return True
     return any(pattern in name for pattern in train_cfg.slow_spec)
 
 
@@ -169,7 +179,9 @@ def split_parameters(model: nn.Module, cfg: ModelConfig, train_cfg: TrainConfig)
     for name, param in model.named_parameters():
         fast_hit = is_fast_param(name, cfg)
         slow_hit = is_slow_param(name, train_cfg)
-        if fast_hit and slow_hit:
+        # Under the full-slow wildcard every name matches, so the overlap is by
+        # construction, not a configuration error: the fast rule wins.
+        if fast_hit and slow_hit and train_cfg.slow_spec != (FULL_SLOW,):
             raise ValueError(
                 f"parameter {name!r} is both fast and slow: it is an MLP projection weight "
                 f"in a fast block and also matches train_cfg.slow_spec={train_cfg.slow_spec!r}. "

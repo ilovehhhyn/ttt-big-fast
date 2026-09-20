@@ -249,3 +249,27 @@ def test_paramsplit_is_frozen_dataclass() -> None:
     split = ParamSplit(fast={}, slow={}, frozen={})
     with pytest.raises(Exception):
         split.fast = {}  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------- arm D: the full-slow spec
+def test_full_slow_spec_makes_every_non_fast_parameter_slow() -> None:
+    """slow_spec=("**",) is arm D: every parameter the inner loop does not own is trained by
+    the outer loop. It used to match NOTHING -- is_slow_param is a substring test and "**"
+    is a substring of no parameter name -- so arm D had an empty slow set and could never
+    have run."""
+    cfg = _cfg(num_layers=4, fast_blocks=2)
+    model = _FakeModel(num_layers=4)
+    split = split_parameters(model, cfg, TrainConfig(seq_len=16, tokens_per_step=32, slow_spec=("**",)))
+    split.assert_disjoint_and_total(model)
+
+    default = split_parameters(_FakeModel(num_layers=4), cfg, TrainConfig(seq_len=16, tokens_per_step=32))
+    assert set(split.fast) == set(default.fast), "the wildcard must not change which weights are fast"
+    assert split.fast and split.slow, "both sets must be non-empty"
+    assert not split.frozen, f"full-slow leaves nothing frozen, got {sorted(split.frozen)[:3]}"
+    assert all(p.requires_grad for p in split.slow.values())
+
+
+def test_full_slow_wildcard_cannot_be_mixed_with_patterns() -> None:
+    """("**", "lora_A") is a contradiction in terms; refuse it where it is written."""
+    with pytest.raises(AssertionError, match="must be the only entry"):
+        TrainConfig(seq_len=16, tokens_per_step=32, slow_spec=("**", "lora_A"))

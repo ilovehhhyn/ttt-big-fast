@@ -221,6 +221,11 @@ class TrainConfig:
 
     def __post_init__(self) -> None:
         assert self.micro_batch >= 1
+        # "**" is the full-slow wildcard (arm D), not a substring pattern; combined with
+        # other patterns it would be meaningless.
+        assert "**" not in self.slow_spec or self.slow_spec == ("**",), (
+            f'"**" must be the only entry of slow_spec, got {self.slow_spec!r}'
+        )
         assert self.tokens_per_step % self.seq_len == 0, (
             f"tokens_per_step {self.tokens_per_step} must be a multiple of seq_len {self.seq_len}"
         )

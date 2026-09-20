@@ -109,3 +109,35 @@ def test_loss_decreases_on_a_memorisable_batch():
     for s in range(2, 10):
         last = tr.train_step(s).loss
     assert last < first, f"loss did not decrease: {first:.4f} -> {last:.4f}"
+
+
+def test_arm_d_full_slow_step_trains_the_base_weights():
+    """Arm D (slow_spec=("**",), no LoRA): the outer loop owns every non-fast parameter.
+
+    Runs under truncated BPTT with a per-window backward, the path it needs at 32K. The
+    fast weights' initialisation W0 is NOT trained: the split is disjoint, the outer
+    optimizer owns only the slow set, so W0 stays the pretrained value in this arm.
+    """
+    mcfg = ModelConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_layers=3,
+                       num_heads=4, num_kv_heads=2, window_size=8, chunk_size=4, fast_blocks=1,
+                       rope=RopeConfig(theta=10000.0, scaling="none"), lora=None)
+    cfg = Config(model=mcfg,
+                 inner=InnerConfig(optimizer="normalized_sgd", lr_rms=1e-2, learned_lr=False),
+                 outer=OuterConfig(lr=1e-2, total_steps=10),
+                 train=TrainConfig(seq_len=16, tokens_per_step=32, dtype="fp32",
+                                   truncate_bptt=2, slow_spec=("**",)))
+    torch.manual_seed(0)
+    model = TTTTransformer(mcfg, max_seq_len=16).double()
+    split = split_parameters(model, mcfg, cfg.train)
+    assert not split.frozen and split.slow and split.fast
+    loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
+    opt = build_outer_optimizer(split.slow, cfg.outer)
+
+    before = {k: v.detach().clone() for k, v in model.named_parameters()}
+    Trainer(cfg, model, split, loop, opt, batches(cfg), device=torch.device("cpu")).train_step(1)
+
+    moved = {k for k, v in model.named_parameters() if not torch.equal(v, before[k])}
+    assert any("embed_tokens" in k for k in moved), "the embedding did not train"
+    assert any(".attn.wq." in k for k in moved), "attention weights did not train"
+    assert any(k.startswith("blocks.0.mlp.") for k in moved), "a NON-fast block's MLP did not train"
+    assert not (moved & set(split.fast)), f"W0 must not move in this arm: {sorted(moved & set(split.fast))}"
