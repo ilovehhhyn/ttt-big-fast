@@ -25,6 +25,8 @@ def main():
     ap.add_argument("--prefix-segment", type=int, default=0)
     ap.add_argument("--remat-group", type=int, default=0)
     ap.add_argument("--truncate-bptt", type=int, default=0)
+    ap.add_argument("--full-slow", action="store_true",
+                    help="arm D: no LoRA, every non-fast weight is a slow (trainable) parameter")
     ap.add_argument("--inference", action="store_true",
                     help="measure the EVAL path (no meta-gradient) instead of training")
     ap.add_argument("--staged", action="store_true",
@@ -34,7 +36,8 @@ def main():
     dev = torch.device("cuda")
     model = build_llama_ttt(MIRROR_REPO, max_seq_len=a.seq_len, window_size=8192,
                             chunk_size=a.chunk, fast_blocks=a.fast_blocks,
-                            lora=LoRAConfig(rank=64, alpha=16.0), dtype=torch.float32).to(dev)
+                            lora=None if a.full_slow else LoRAConfig(rank=64, alpha=16.0),
+                            dtype=torch.float32).to(dev)
     model.remat_blocks = a.remat_blocks
     cfg = Config(model=model.cfg,
                  inner=InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3, learned_lr=True),
@@ -42,12 +45,16 @@ def main():
                  train=TrainConfig(seq_len=a.seq_len, tokens_per_step=a.seq_len,
                                    remat_group=a.remat_group, dtype=a.dtype, prefix_segment=a.prefix_segment,
                                    truncate_bptt=a.truncate_bptt,
-                                   slow_spec=("lora_A", "lora_B", "norm.weight", "inner_lr_log")))
+                                   slow_spec=("**",) if a.full_slow else
+                                   ("lora_A", "lora_B", "norm.weight", "inner_lr_log")))
     split = split_parameters(model, model.cfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
     print(f"config: dtype={a.dtype} fast_blocks={a.fast_blocks} chunk={a.chunk} "
           f"chunks={cfg.num_chunks} group={loop.group} remat_blocks={a.remat_blocks}", flush=True)
     print(f"after load: {gib(torch.cuda.memory_allocated()):.2f} GiB", flush=True)
+    n_slow = sum(v.numel() for v in split.slow.values())
+    print(f"slow params: {n_slow:,}  -> grads {gib(4 * n_slow):.2f} GiB (in the peak below), "
+          f"AdamW moments {gib(8 * n_slow):.2f} GiB (NOT in the peak below: add them)", flush=True)
 
     ids = torch.randint(0, model.cfg.vocab_size, (1, a.seq_len), device=dev)
     tgt = torch.randint(0, model.cfg.vocab_size, (1, a.seq_len), device=dev)
