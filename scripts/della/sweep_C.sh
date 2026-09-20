@@ -16,7 +16,11 @@ submit () { sbatch --job-name="$1" --qos=gpu-medium --time=12:00:00 --parsable \
             scripts/della/run_arm.sbatch $COMMON --out "results/$1.json" "${@:2}"; }
 
 case "$STAGE" in
-  1) for opt in normalized_sgd adamw; do for eta in 3e-4 1e-3 3e-3; do
+  # Inner LR is a per-element RMS step; the unit is 1/sqrt(n_fast) = 7.05e-5 for the
+  # 201M-parameter fast set, and the measured 32K optimum is 4e-6. This grid used to be
+  # 3e-4 1e-3 3e-3, copied from the paper's 11.5M-parameter prime MLP: 4x to 40x the
+  # unit, which diverges (loss 2.55 -> 20.2). Do not raise it without re-deriving the unit.
+  1) for opt in normalized_sgd adamw; do for eta in 2e-6 4e-6 7e-6; do
        submit "C_s1_${opt}_eta${eta}" --inner "$opt" --inner-lr "$eta" --outer-lr 1e-3 --lora-rank 64
      done; done ;;
   2) for olr in 3e-5 1e-4 3e-4 1e-3 3e-3 1e-2; do

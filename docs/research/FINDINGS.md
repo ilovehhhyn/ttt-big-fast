@@ -247,6 +247,12 @@ rematerialises one segment at a time.
 | 32K | 2 | flat 8.86 GiB | 49.57 | completes |
 | 32K | 4 | - | 77.45 | OOM |
 
+These peaks are from `scripts/memory_probe.py`: ONE sequence, no optimizer step. A real
+training step is higher, because the trainer accumulates over 4 sequences with gradients
+resident and AdamW's moments allocated: the 32K `truncate_bptt=2` jobs report a training
+peak of **68.0 GiB** (`peak_gib` in their result files), against 49.57 here. Size jobs from
+the 68 GiB figure.
+
 Resident memory is now O(window), not O(sequence). What remains is a transient spike during
 each window's double backward, roughly independent of sequence length - which is why 32K at
 `trunc=2` (49.6 GiB) is cheaper than 16K at `trunc=2` (55.4 GiB) but `trunc=4` still dies.
@@ -273,12 +279,15 @@ then applies the update (loss before update, Eq. 6), and calls
 `jax.nn.log_softmax`, so their numbers are nats too.
 
 **The inner-LR unit, confirmed independently.** `optimizer_inner` is
-`clip_by_global_norm(1.0)` followed by `sgd(lr=1)`: every inner update has global norm
-exactly 1, whatever the gradient scale. In this codebase's per-element RMS
+`clip_by_global_norm(1.0)` followed by `sgd(lr=1)`: the inner update has global norm
+min(||g||, 1), so AT MOST 1, and exactly 1 only when the gradient norm is at least 1
+(section 1 and the `ClippedSGD` docstring state this correctly; an earlier version of this
+sentence said "exactly 1, whatever the gradient scale", which was wrong). In this codebase's per-element RMS
 parameterisation a unit-norm step over n_fast elements is `1/sqrt(n_fast)` = 7.05e-5 for
 n_fast = 201,326,592. That is the value inferred in section 11 after the 14x-too-large
-bug; it is now confirmed from their config rather than inferred. The 32K optimum here is
-4e-6, 0.057x theirs. Their W_0 is meta-learned from scratch to be updated; ours is a
+bug; it is now confirmed from their config rather than inferred. It is the per-element size
+of their LARGEST possible step, an upper bound on what they actually take. The 32K optimum
+here is 4e-6, 0.057x that maximum. Their W_0 is meta-learned from scratch to be updated; ours is a
 pretrained Llama that was never trained to receive fast-weight updates.
 
 **Deliberate deviations, now explicit.**

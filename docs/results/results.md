@@ -204,7 +204,7 @@ The single most informative number is the learned inner learning rate. It starts
 inner loop off, which is the rational response when TTT is harmful. It moved only 0.85%,
 so this is a direction, not a conclusion.
 
-**What this does and does not establish.** It does not test H1: 24 outer steps is 786K
+**What this does and does not establish.** It does not test H1: 24 outer steps at 8192 tokens per step is 196,608 (not 786K, as this line once said)
 tokens against a planned 125M, so the adapter has barely moved, and arm D (all-weights slow)
 was not run, so the falsifier "C approximately equals B while D is much greater than B" is
 only half-measured. What it does establish is that the whole pipeline runs end to end and
@@ -284,6 +284,7 @@ The curve is cleanly U-shaped with an interior optimum at 0.057x the e2e-equival
 Every setting from 0.028x to 0.14x beats no-TTT; the method is not knife-edge sensitive,
 it simply needs a step roughly an order of magnitude gentler than the paper's own.
 
+(Superseded: the figures in this paragraph predate the contamination fix below; the corrected values are -0.1424 nats at an optimum of 0.057x the e2e-equivalent step.)
 **Test-time training improves held-out loss by 0.139 nats with no meta-learning at all**,
 once the window is small enough relative to the context for the compressed memory to be
 worth having. The optimum is around a tenth of the e2e-equivalent step, far gentler than
@@ -344,15 +345,25 @@ only benefit from TTT is the memory mechanism. Our curve isolates that mechanism
 
 ## Context scaling: the benefit grows with context length
 
-Same model, same inner rule (normalized SGD at 4e-6), same window k=8192, same PG-19
-validation books. Only the context length T changes, so T/k is how much of the sequence
-falls outside the attention window.
+Same model and window (k=8192) throughout. **The 8K row is NOT matched to the other two**:
+it is DCLM rather than PG-19, and its arm B value is the inner-lr **2e-5** entry of the 8K
+scan (no 8K run at 4e-6 exists). The 16K and 32K rows use PG-19 at 4e-6. An earlier
+version of this caption claimed one inner rule and one dataset for all three rows; that was
+wrong (caught in the 2026-09-20 check-in review).
 
-| context T | T/k | arm A (no TTT) | arm B (TTT) | delta |
-|---|---|---|---|---|
-| 8192 (DCLM) | 1 | 2.4940 | 2.6632 | **+0.1692** |
-| 16384 | 2 | 2.9764 | 2.9286 | **-0.0478** |
-| 32768 | 4 | 3.7119 | 3.5694 | **-0.1424** |
+| context T | data | inner lr | T/k | arm A (no TTT) | arm B (TTT) | delta |
+|---|---|---|---|---|---|---|
+| 8192 | DCLM | 2e-5 | 1 | 2.4940 | 2.6632 | +0.1692 |
+| 16384 | PG-19 | 4e-6 | 2 | 2.9764 | 2.9286 | **-0.0478** |
+| 32768 | PG-19 | 4e-6 | 4 | 3.7119 | 3.5694 | **-0.1424** |
+
+So "+0.169 -> -0.048 -> -0.142" is not a clean trend in T alone: at the same 2e-5, TTT
+also hurts at 32K (+0.0670, table above), which means part of the 8K harm is an over-large
+step rather than the context regime. The matched evidence for the T/k = 1 regime is the
+in-window band of the 32K evaluation (same data, same 4e-6): TTT changes the loss on
+positions 0 to 8K by -0.0013, i.e. it does nothing when the context is inside the window,
+and the gain appears only beyond it (+0.1132, +0.2041, +0.2550 per 8K band; see the
+2026-09-20 section). A matched 8K PG-19 pair at 4e-6 has not been run.
 
 Test-time training goes from harmful to helpful to more helpful as more of the context
 falls outside the window. This is the qualitative behaviour TTT-E2E's Figure 1 reports -
@@ -390,9 +401,12 @@ loss, and the run learns a different, plainly fine-tuned LoRA. The two runs do n
 slow weights, so nothing can be subtracted.
 
 What the pair does establish is a system-level comparison: at an equal budget of 10 steps,
-the full method beats plain LoRA fine-tuning by 0.044 nats. It also shows that most of the
-distance from arm A is adaptation to PG-19 rather than anything specific to this method,
-which is the honest context for the headline number.
+the full method beats plain LoRA fine-tuning by 0.044 nats (one pair of runs, no seeds,
+no interval). It also shows that most of the distance from arm A is something plain
+fine-tuning achieves too, which is the honest context for the headline number. (This
+paragraph originally called that "adaptation to PG-19". That was wrong: the fine-tune does
+not improve the in-window loss at all. See "The un-tuned model falls off a cliff at the
+window edge" in the 2026-09-20 section.)
 
 ### Same weights, inner loop on and off
 
@@ -559,6 +573,16 @@ noted) and evaluate the same 32 validation sequences with the inner loop on and 
 | 14167120 | C32k_bs16 | 16 seq/step, 20 steps | batch ladder |
 | 14167121 | C32k_bs32 | 32 seq/step, 20 steps | batch ladder; matches the reference batch (1,048,576 tokens) |
 | 14169729 | C32k_bs32s60 | 32 seq/step, 60 steps | closest approach to the reference regime (63M tokens) |
+
+Wall-time limits as submitted: C32k_t2, C32k_t1, C32k_ctl20, C32k_bs16 5 h; C32k_s60,
+C32k_bs8 4 h; C32k_s150, C32k_bs32 8 h; C32k_bs32s60 22 h. At the measured 132 s per step
+for 4 sequences (33 s per sequence) the longest training phases are about 5.5 h (s150),
+5.9 h (bs32) and 17.6 h (bs32s60), inside their limits; a job that does hit its limit
+resumes from its last step.
+
+All 32K arm C runs so far used the CLI default `--lora-targets wq,wk,wv,wo,w1,w2,w3`, i.e.
+LoRA on the attention projections AND on the MLPs, 45,156,364 slow parameters (the `[run]`
+line of each job log). The 8K pilot and the local SmolLM2 run used attention-only LoRA.
 
 The batch ladder holds steps fixed, so larger batches also see more tokens; it measures
 "more compute per step", not batch size in isolation. The 60- and 150-step runs do not yet

@@ -8,10 +8,12 @@ loop takes a step.
                   Using the same chunked path as arm C (rather than a plain forward)
                   keeps the compute graph identical, so A vs C isolates TTT itself.
     B  ttt-naive  inner loop on, nothing slow -> dynamic evaluation, no meta-learning.
-    C  proposed   fast = MLPs of the last `fast_blocks`; slow = attention LoRA +
-                  RMSNorm gains + learned per-tensor inner LRs.
+    C  proposed   fast = MLPs of the last `fast_blocks`; slow = LoRA (by default on the
+                  attention projections AND the MLPs, see --lora-targets) + RMSNorm gains
+                  + learned per-tensor inner LRs.
     D  full-slow  same fast set, every parameter slow.
-    F  small-fast paper-style: fewer fast blocks, same slow set as C.
+    F  paper-layout control: static pretrained MLP kept as safe storage, a separate prime MLP
+       carries the fast weights (plan section 0.1 and Task 7). NOT IMPLEMENTED: refuses to run.
 
 Usage:
     python -m ttt.run --arm A --mode eval  --data DIR --out results/A.json
@@ -64,7 +66,7 @@ ARMS = {
 
 def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoop, torch.device]:
     # Arm F is the paper-layout control: the pretrained MLP is kept static as safe storage
-    # and a separate prime MLP carries the fast weights (plan section 0.2). That model
+    # and a separate prime MLP carries the fast weights (plan section 0.1, Task 7). That model
     # construction does not exist on the Llama path yet, and the ARMS entry below is a
     # placeholder identical to arm C. Refuse to run rather than report arm C's numbers
     # under arm F's name.
