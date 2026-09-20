@@ -89,7 +89,7 @@ def evaluate(
             with torch.enable_grad():
                 out = loop.run_sequence(
                     ids[i : i + 1], targets[i : i + 1], loss_mask[i : i + 1],
-                    dict(split.fast), lr_scale=1.0, lr_mult=lr_mult,
+                    dict(split.fast), lr_scale=1.0, lr_mult=lr_mult, inference=True,
                 )
                 # Detach everything we keep: the graph dies with `out` at the end
                 # of this iteration, so peak memory is one sequence, not the split.

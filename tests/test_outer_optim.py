@@ -229,3 +229,30 @@ def test_grad_clip_matches_config():
     assert OuterConfig().grad_clip == 1.0
     assert OuterConfig().beta1 == 0.9 and OuterConfig().beta2 == 0.95
     assert math.isclose(OuterConfig().weight_decay, 0.1)
+
+
+def test_zero_length_warmup_is_an_error_not_a_silent_skip():
+    """A warmup that rounds to zero must fail loudly.
+
+    At total_steps=3 with the default frac=0.1 both schedules previously dropped their
+    warmup silently: lr_at_step fell through to the cosine and returned full lr at step
+    0, and inner_lr_scale_at_step returned 1.0 instead of 0.1. Two runs differing only
+    in step count then optimised on different schedules while looking identical.
+    """
+    from ttt.optim.outer import resolve_warmup
+
+    with pytest.raises(AssertionError, match="rounds to a 0-step warmup"):
+        resolve_warmup(0.1, 3, "warmup_frac")
+    with pytest.raises(AssertionError, match="rounds to a 0-step warmup"):
+        lr_at_step(0, OuterConfig(lr=4e-4, total_steps=3))
+    with pytest.raises(AssertionError, match="rounds to a 0-step warmup"):
+        inner_lr_scale_at_step(0, InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3), 3)
+
+    # frac=0 is the explicit, supported way to ask for no warmup.
+    assert resolve_warmup(0.0, 3, "warmup_frac") == 0
+    assert inner_lr_scale_at_step(0, InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3,
+                                                 lr_warmup_frac=0.0), 3) == 1.0
+    # And a step count that CAN carry the warmup still behaves as before.
+    assert resolve_warmup(0.1, 20, "warmup_frac") == 2
+    assert lr_at_step(0, OuterConfig(lr=4e-4, total_steps=20)) == 0.0
+    assert inner_lr_scale_at_step(0, InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3), 20) == 0.1

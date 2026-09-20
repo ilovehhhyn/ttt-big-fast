@@ -104,6 +104,33 @@ def build_outer_optimizer(slow: dict[str, Tensor], cfg: OuterConfig) -> torch.op
     return torch.optim.AdamW(groups, lr=cfg.lr, betas=(cfg.beta1, cfg.beta2))
 
 
+def resolve_warmup(frac: float, total_steps: int, name: str) -> int:
+    """Warmup length in STEPS, or a hard error if the configuration cannot deliver one.
+
+        W = round(frac * total_steps)
+
+    A configured warmup (frac > 0) that rounds to W = 0 is a BUG, not a no-op: it
+    silently changes the optimisation schedule, so two runs that differ only in
+    total_steps are no longer comparable. At total_steps=3 with frac=0.1 both the outer
+    and the inner warmup vanished this way, and the run looked normal. Fail loudly
+    instead; frac=0 remains the explicit way to ask for no warmup.
+    """
+    assert 0.0 <= frac < 1.0, f"{name} must be in [0, 1), got {frac}"
+    assert total_steps >= 1, f"total_steps must be >= 1, got {total_steps}"
+    if frac == 0.0:
+        return 0
+    warmup = round(frac * total_steps)
+    assert warmup >= 1, (
+        f"{name}={frac} over total_steps={total_steps} rounds to a 0-step warmup. "
+        f"Use total_steps >= {math.ceil(0.5 / frac)}, or set {name}=0 to disable warmup "
+        f"on purpose."
+    )
+    assert warmup < total_steps, (
+        f"{name}={frac} gives warmup {warmup} >= total_steps {total_steps}"
+    )
+    return warmup
+
+
 def lr_at_step(step: int, cfg: OuterConfig) -> float:
     """Outer learning rate at 0-indexed outer ``step``.
 
@@ -120,8 +147,7 @@ def lr_at_step(step: int, cfg: OuterConfig) -> float:
     """
     assert step >= 0, f"step must be 0-indexed and non-negative, got {step}"
     total = cfg.total_steps
-    warmup = round(cfg.warmup_frac * total)
-    assert warmup < total, f"warmup {warmup} must be shorter than total_steps {total}"
+    warmup = resolve_warmup(cfg.warmup_frac, total, "warmup_frac")
 
     if step < warmup:
         return cfg.lr * step / warmup
@@ -145,10 +171,10 @@ def inner_lr_scale_at_step(step: int, cfg: InnerConfig, total_steps: int) -> flo
     the fast weights then have something to differentiate through before they
     are allowed to move at full rate.
     """
-    assert step >= 0 and total_steps >= 1
-    warmup = round(cfg.lr_warmup_frac * total_steps)
+    assert step >= 0
+    warmup = resolve_warmup(cfg.lr_warmup_frac, total_steps, "lr_warmup_frac")
     if warmup == 0:
-        return 1.0
+        return 1.0  # frac == 0: warmup disabled on purpose
     if step >= warmup:
         return 1.0
     return 0.1 + 0.9 * step / warmup

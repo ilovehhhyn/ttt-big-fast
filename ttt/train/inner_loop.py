@@ -188,8 +188,14 @@ class TTTInnerLoop:
         chunk_index: int,
         lr_scale: Tensor | float,
         lr_mult: dict[str, Tensor] | None,
+        create_graph: bool,
     ) -> tuple[dict[str, Tensor], dict, list, Tensor, Tensor]:
-        """One TTT step. Returns (W_i, opt_state, caches, loss_before_update, token_nll)."""
+        """One TTT step. Returns (W_i, opt_state, caches, loss_before_update, token_nll).
+
+        `create_graph` builds the second-order path needed for the META-gradient. At
+        inference there is no meta-gradient, so it is False and W_i is re-attached as a
+        fresh leaf: the inner update itself is unchanged, only the graph is not kept.
+        """
         fast = self._decay_toward_init(fast, fast0)
 
         with self._autocast(prefix_chunk.device.type):
@@ -205,13 +211,19 @@ class TTTInnerLoop:
 
         keys = self._fast_keys(fast)
         grads = torch.autograd.grad(
-            loss, [fast[k] for k in keys], create_graph=True, allow_unused=False
+            loss, [fast[k] for k in keys], create_graph=create_graph, allow_unused=False
         )
         grad_dict = dict(zip(keys, grads, strict=True))
 
         fast, opt_state = self.inner_opt.step(
             fast, grad_dict, opt_state, lr_scale=lr_scale, lr_mult=lr_mult
         )
+        if not create_graph:
+            # W_i must still be differentiable so the NEXT chunk can take dL/dW_i, but it
+            # carries no history: that is what makes inference memory O(1) in chunks.
+            fast = {k: v.detach().requires_grad_(True) for k, v in fast.items()}
+            st_t, st_tmpl = flatten_state(opt_state)
+            opt_state = unflatten_state(tuple(t.detach() for t in st_t), st_tmpl)
         return fast, opt_state, caches, loss, token_nll
 
     def _first_grad(self, prefix_out, targets, loss_mask, fast, caches) -> dict[str, Tensor]:
@@ -237,7 +249,15 @@ class TTTInnerLoop:
         lr_scale: Tensor | float = 1.0,
         lr_mult: dict[str, Tensor] | None = None,
         backward_scale: float | None = None,
+        inference: bool = False,
     ) -> SequenceOutput:
+        # Inference (evaluation, forgetting probe) takes no meta-gradient, so the
+        # second-order graph is pure waste there: building it made a 32K arm C eval cost
+        # O(num_chunks) and OOM on an 80 GiB card.
+        create_graph = not inference
+        assert not (inference and backward_scale is not None), (
+            "inference builds no meta-gradient, so there is nothing for backward_scale to scale"
+        )
         b, t = input_ids.shape
         assert b == 1, f"inner loop requires micro_batch=1 (fast weights are per-sequence), got {b}"
         assert t == self.cfg.train.seq_len, f"expected seq_len {self.cfg.train.seq_len}, got {t}"
@@ -258,7 +278,13 @@ class TTTInnerLoop:
             with self._autocast(ids.device.type):
                 return self.model.prefix_forward(ids, segment=seg)
 
-        prefix_out = checkpoint(_prefix, input_ids, use_reentrant=False)  # [1, T, d]
+        if inference:
+            # No meta-gradient, and the prefix holds no fast weights, so the inner
+            # gradient never reaches it. Nothing here needs a graph at all.
+            with torch.no_grad():
+                prefix_out = _prefix(input_ids)
+        else:
+            prefix_out = checkpoint(_prefix, input_ids, use_reentrant=False)  # [1, T, d]
 
         fast = dict(fast0)
         caches = self.model.init_caches(batch=1, device=input_ids.device, dtype=prefix_out.dtype)
@@ -295,7 +321,7 @@ class TTTInnerLoop:
                 f, st, c, loss_i, nll_i = self._chunk_step(
                     f, fast0, st, c,
                     prefix_out[:, sl], targets[:, sl], loss_mask[:, sl],
-                    idx, lr_scale, lr_mult,
+                    idx, lr_scale, lr_mult, create_graph,
                 )
                 losses.append(loss_i)
                 nlls.append(nll_i)
@@ -323,8 +349,16 @@ class TTTInnerLoop:
             window_losses.clear()
 
         for start in range(0, self.num_chunks, self.group):
-            out = checkpoint(run_group, start, *flat, use_reentrant=False)
+            if inference:
+                out = run_group(start, *flat)
+                out = tuple(x.detach() for x in out)
+            else:
+                out = checkpoint(run_group, start, *flat, use_reentrant=False)
             flat = out[: len(keys) + n_state_t + n_cache_t]
+            if inference:
+                n_fast = len(keys)
+                flat = tuple(x.requires_grad_(True) if i < n_fast else x
+                             for i, x in enumerate(flat))
             (window_losses if per_window else chunk_losses).append(out[-2])
             token_nlls.append(out[-1])
             # Diagnostic only: lets a probe read the memory growth per group without

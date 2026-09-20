@@ -247,3 +247,36 @@ def test_per_window_backward_matches_single_backward():
     for p, g in zip(slow, g_ref, strict=True):
         have = torch.zeros_like(p) if p.grad is None else p.grad
         assert torch.allclose(have, g, atol=1e-10), (have - g).abs().max().item()
+
+
+def test_inference_mode_reports_identical_numbers():
+    """inference=True must change only the graph, never a reported value.
+
+    It skips create_graph, the checkpointed regions and the prefix graph, all of which
+    exist solely to carry the META-gradient. The TTT updates themselves are unchanged,
+    so loss, per-chunk loss and token NLL must match the training path exactly.
+    """
+    cfg, model, split = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
+    loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
+    ids, tgt, mask = batch(cfg)
+
+    train_path = loop.run_sequence(ids, tgt, mask, dict(split.fast))
+    infer_path = loop.run_sequence(ids, tgt, mask, dict(split.fast), inference=True)
+
+    assert torch.allclose(train_path.loss, infer_path.loss, atol=1e-12), (
+        (train_path.loss - infer_path.loss).abs().item()
+    )
+    assert torch.allclose(train_path.per_chunk_loss, infer_path.per_chunk_loss, atol=1e-12)
+    assert torch.allclose(train_path.token_nll, infer_path.token_nll, atol=1e-12)
+    for k in train_path.fast_final:
+        assert torch.allclose(train_path.fast_final[k], infer_path.fast_final[k], atol=1e-12), k
+    # The point of the mode: no second-order graph is kept.
+    assert not infer_path.loss.requires_grad
+
+
+def test_inference_mode_rejects_backward_scale():
+    cfg, model, split = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=False))
+    loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
+    ids, tgt, mask = batch(cfg)
+    with pytest.raises(AssertionError, match="nothing for backward_scale to scale"):
+        loop.run_sequence(ids, tgt, mask, dict(split.fast), backward_scale=1.0, inference=True)

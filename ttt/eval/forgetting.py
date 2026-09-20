@@ -118,6 +118,7 @@ def forgetting_delta_nll(loop: TTTInnerLoop, split, seq_batch: dict, probe_batch
             dict(split.fast),
             lr_scale=1.0,
             lr_mult=lr_mult,
+            inference=True,
         )
         fast_final = {k: v.detach() for k, v in out.fast_final.items()}
     del out
