@@ -161,3 +161,20 @@ def test_inner_loop_really_breaks_under_no_grad():
     b = make_batch(cfg, seed=0)
     with torch.no_grad(), pytest.raises(RuntimeError, match="does not require grad"):
         loop.run_sequence(b["input_ids"], b["targets"], b["loss_mask"], dict(split.fast))
+
+
+def test_per_sequence_losses_are_recorded_and_average_to_the_reported_loss():
+    """One loss per evaluated sequence, consistent with the headline number.
+
+    Without these, a small between-arm difference has no error bar: token_nll is already
+    averaged ACROSS sequences, so it can only show where in the context a gain sits, not
+    whether it survives document-to-document variation.
+    """
+    cfg, model, split, loop = build(InnerConfig(optimizer="normalized_sgd", lr_rms=1e-2, learned_lr=False))
+    res = evaluate(loop, split, loader(cfg, seeds=(0, 1, 2, 3)), device=torch.device("cpu"))
+
+    assert len(res.per_sequence_loss) == res.num_sequences == 4
+    # Tolerance is float32-level, not exact: the headline loss accumulates in a tensor
+    # while this list is summed in Python float64, so the two round differently.
+    mean = sum(res.per_sequence_loss) / len(res.per_sequence_loss)
+    assert abs(mean - res.loss) <= 1e-5 * max(1.0, abs(res.loss)), (mean, res.loss)

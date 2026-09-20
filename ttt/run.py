@@ -210,7 +210,9 @@ def main() -> None:
     t0 = time.perf_counter()
     ev = evaluate(loop, split, val_loader, max_sequences=args.eval_sequences, device=device)
     result["eval"] = {"loss": ev.loss, "num_sequences": ev.num_sequences,
-                      "token_nll": ev.token_nll.tolist(), "seconds": time.perf_counter() - t0}
+                      "token_nll": ev.token_nll.tolist(),
+                      "per_sequence_loss": ev.per_sequence_loss,
+                      "seconds": time.perf_counter() - t0}
     if torch.cuda.is_available():
         result["peak_gib"] = torch.cuda.max_memory_allocated() / 2**30
     print(f"[eval] arm={args.arm} loss={ev.loss:.4f} n={ev.num_sequences} "
