@@ -622,6 +622,61 @@ AdamW's optimum as arm B is bracketed at about 2e-5 (-0.0944), five times the st
 SGD prefers (4e-6, -0.1428), and its best is about two thirds of normalized SGD's best. Above
 5e-5 it is worse than no TTT. No meta-trained run with AdamW as the inner rule exists.
 
+### What context beyond the window is worth
+
+`scripts/context_value.py` scores the same tokens twice with the un-tuned model, both times
+with a healthy full-attention forward: once over the whole 32K sequence (FULL), once with the
+context restarted every S = 8192 tokens (RESTART: independent 8192-token segments, positions
+restarting at 0). For a token in segments 1 to 3, NLL_restart - NLL_full is what all the older
+context is worth to a model that still has q recent tokens. Paired per sequence, clustered by
+book (32 sequences, 22 books).
+
+| window S | recent context in the restart condition | full | restart | value (per document) | 95% CI | documents positive |
+|---|---|---|---|---|---|---|
+| 8192 | >= 4096 tokens | 2.3187 | 2.3487 | +0.0304 | [+0.0220, +0.0388] | 21/22 |
+| 8192 | >= 6144 tokens | 2.3281 | 2.3505 | +0.0224 | [+0.0154, +0.0295] | 21/22 |
+| 8192 | >= 7168 tokens | 2.3187 | 2.3395 | +0.0208 | [+0.0139, +0.0277] | 21/22 |
+| 8192 | sanity: segment 0, identical input | | | max abs diff 0.0e+00 | | |
+
+The sanity row is exact: given identical input the two code paths agree to the last bit, so the
+differences above are due to context length alone.
+
+**On this benchmark, everything outside an 8192-token window is worth about 0.02 nats per
+token to a healthy model.** That is an UPPER bound for a sliding window, which always keeps
+8192 recent tokens, more than the restart condition's 7168 or more. It is the most any
+out-of-window memory mechanism, test-time training included, can gain at T = 32768, k = 8192 on
+PG-19 with this model. Against it:
+
+- arm B's gain over arm A is +0.1405 nats per book. At most about 0.02 of that can be recovered
+  long-range information; the rest, at least 85%, is repair of the damage the window does to
+  the un-tuned model.
+- the same-weights gain from TTT on the 8-step arm C model, +0.0248, is about the size of the
+  ceiling, but it was measured on a model that is still broken beyond the window (about 2.83
+  there against about 2.32 healthy), so it cannot be credited to memory either.
+
+Three of the 32 evaluation sequences are near-memorised text (0.13, 0.17 and 0.24 nats under
+full attention; one book). They are scored identically in every arm and count as one book in
+the clustered tests.
+
+### Arm D: the slow set was empty, and what it costs to run
+
+`slow_spec=("**",)` was matched as a substring, and "**" occurs in no parameter name, so arm D
+had an EMPTY slow set and had never been runnable. The first arm D memory probe printed
+`slow params: 0` and is void. "**" is now a wildcard for every non-fast parameter (the fast
+rule wins; nothing is frozen; it is refused if mixed with patterns), tested on the split and
+with a real training step under per-window truncated BPTT. On Llama-3.2-1B the split is fast
+201,326,592 / slow 1,034,487,820 / frozen 0 (the `[run]` line of jobs 14198617 and 14198618).
+Two properties of this arm as implemented: the fast weights' initialisation W0 is NOT trained
+(the split is disjoint and the outer optimizer owns only the slow set), and no weight decay is
+applied (decay is defined on the LoRA factors only, and arm D has none).
+
+**Arm D does not fit one 80 GiB GPU at 32K with `truncate_bptt=2`.** Validation runs at outer
+learning rates 4e-4 and 4e-5 (jobs 14198617, 14198618; 10 steps, 4 sequences per step) completed
+step 0 (loss 3.7461, gradient norm 33.96 over all weights, 129 seconds per step, the same speed
+as arm C) and ran out of memory in step 1 with 78.73 GiB in use: arm C's 68 GiB training peak
+plus the gradients and the two AdamW moments of 1.03 B parameters. Step 0 fits only because
+AdamW allocates its moments at the first optimizer step.
+
 ## Runs in flight (as last observed 2026-09-20, about 14:25 ET)
 
 On 2026-09-20 `sbatch --test-only` estimated a start of 2026-09-24 for any job longer than
