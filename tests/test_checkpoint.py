@@ -86,7 +86,7 @@ def test_resumed_run_is_indistinguishable_from_an_uninterrupted_one(tmp_path):
     with torch.no_grad():
         for v in split.slow.values():
             v.add_(torch.randn_like(v))
-    step, history = load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP)
+    step, history = load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP, defaults={})
     assert step == cut and history == logs_a
 
     start_sequence = step * cfg.train.seqs_per_step  # sequences already consumed
@@ -111,7 +111,7 @@ def test_optimizer_moments_are_restored_not_reinitialised(tmp_path):
 
     cfg, model, split, loop, opt = build()
     assert not opt.state_dict()["state"], "fresh optimizer should start empty"
-    load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP)
+    load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP, defaults={})
     got = opt.state_dict()["state"]
     assert got.keys() == want.keys()
     for i in want:
@@ -126,7 +126,7 @@ def test_resume_refuses_a_different_configuration(tmp_path):
     save_checkpoint(ckpt, step=1, split=split, optimizer=opt, history=[], fingerprint=FP)
     changed = dict(FP, outer_lr=3e-4)
     with pytest.raises(AssertionError, match="outer_lr"):
-        load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=changed)
+        load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=changed, defaults={})
 
 
 def test_load_refuses_a_checkpoint_for_a_different_parameter_set(tmp_path):
@@ -139,7 +139,7 @@ def test_load_refuses_a_checkpoint_for_a_different_parameter_set(tmp_path):
     del blob["slow"][dropped]
     torch.save(blob, ckpt)
     with pytest.raises(AssertionError, match="slow parameter names"):
-        load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP)
+        load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP, defaults={})
 
 
 def test_a_failed_save_leaves_the_previous_checkpoint_intact(tmp_path, monkeypatch):
@@ -160,7 +160,7 @@ def test_a_failed_save_leaves_the_previous_checkpoint_intact(tmp_path, monkeypat
     monkeypatch.undo()
 
     assert ckpt.read_bytes() == good, "a failed save corrupted the last good checkpoint"
-    step, history = load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP)
+    step, history = load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP, defaults={})
     assert step == 1 and history == [{"step": 0}]
 
 
@@ -170,3 +170,31 @@ def test_fingerprint_ignores_operational_args_only():
     assert training_fingerprint(a) == training_fingerprint(b)
     assert training_fingerprint(a) != training_fingerprint(dict(a, steps=21))
     assert "seq_len" in training_fingerprint(a) and "out" not in training_fingerprint(a)
+
+
+def test_flag_added_after_the_checkpoint_is_fine_at_its_default_only(tmp_path):
+    """Jobs wait days in the queue and the code moves on underneath them. A flag that did
+    not exist when the checkpoint was written cannot have influenced that run, so resuming
+    is the same experiment exactly when the new flag is still at its default."""
+    cfg, model, split, loop, opt = build()
+    ckpt = tmp_path / "run.ckpt"
+    save_checkpoint(ckpt, step=1, split=split, optimizer=opt, history=[], fingerprint=FP)
+    defaults = {"new_flag": 0.0}
+
+    at_default = dict(FP, new_flag=0.0)
+    step, _ = load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=at_default, defaults=defaults)
+    assert step == 1
+
+    changed = dict(FP, new_flag=0.5)
+    with pytest.raises(AssertionError, match="new_flag"):
+        load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=changed, defaults=defaults)
+
+
+def test_flag_removed_since_the_checkpoint_is_refused(tmp_path):
+    """The reverse is not safe: a setting the old run depended on no longer exists."""
+    cfg, model, split, loop, opt = build()
+    ckpt = tmp_path / "run.ckpt"
+    save_checkpoint(ckpt, step=1, split=split, optimizer=opt, history=[],
+                    fingerprint=dict(FP, old_flag=3))
+    with pytest.raises(AssertionError, match="old_flag"):
+        load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP, defaults={})

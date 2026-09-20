@@ -34,7 +34,8 @@ from torch import Tensor
 
 from ttt.train.inner_loop import TTTInnerLoop, masked_cross_entropy
 
-__all__ = ["forgetting_delta_nll", "lr_multipliers", "probe_delta_nll", "score_with_weights"]
+__all__ = ["build_probe_batch", "forgetting_delta_nll", "lr_multipliers", "probe_delta_nll",
+           "score_with_weights"]
 
 
 def _one_sequence(batch: dict, key: str) -> Tensor:
@@ -62,16 +63,22 @@ def score_with_weights(loop: TTTInnerLoop, batch: dict, fast: dict[str, Tensor])
     assert t % chunk == 0, f"probe length {t} is not divisible by chunk_size {chunk}"
     assert targets.shape == input_ids.shape and loss_mask.shape == input_ids.shape
 
-    prefix_out = model.prefix_forward(input_ids)
+    # Score under the SAME numerics as the run being probed: the inner loop's autocast and
+    # its prefix segmentation. A probe scored in fp32 against a bf16 run would still give a
+    # self-consistent delta, but there is no reason for the two paths to differ.
+    segment = cfg.train.prefix_segment or None
+    with loop._autocast(input_ids.device.type):
+        prefix_out = model.prefix_forward(input_ids, segment=segment)
     caches = model.init_caches(batch=1, device=input_ids.device, dtype=prefix_out.dtype)
 
     nll_sum: Tensor | None = None
     denom: Tensor | None = None
     for i in range(t // chunk):
         sl = slice(i * chunk, (i + 1) * chunk)
-        logits, caches = model.suffix_forward(
-            prefix_out[:, sl], fast=fast, caches=caches, chunk_index=i
-        )
+        with loop._autocast(input_ids.device.type):
+            logits, caches = model.suffix_forward(
+                prefix_out[:, sl], fast=fast, caches=caches, chunk_index=i
+            )
         _, token_nll = masked_cross_entropy(logits, targets[:, sl], loss_mask[:, sl])
         mask = loss_mask[:, sl].to(token_nll.dtype)
         chunk_sum = (token_nll * mask).sum()
@@ -135,3 +142,29 @@ def lr_multipliers(loop: TTTInnerLoop) -> dict[str, Tensor] | None:
     if not loop.cfg.inner.learned_lr:
         return None
     return {k: v.detach() for k, v in loop.model.inner_lr_multipliers().items()}
+
+
+def build_probe_batch(data_dir, seq_len: int, seed: int, n_eval: int, probe_tokens: int) -> tuple[dict, dict]:
+    """The forgetting probe for an evaluation of the first `n_eval` shuffled val sequences.
+
+    Returns (batch, provenance). The probe is the first `probe_tokens` tokens of the first
+    held-out sequence whose document none of the evaluated sequences touches (see
+    select_probe_position), so it is text the fast weights never adapted to. The order is
+    rebuilt with the loader's own function, so "evaluated" here cannot drift from what
+    `evaluate` actually scores.
+    """
+    import numpy as np
+
+    from ttt.data.dataset import TokenSequenceDataset, _shard_indices
+    from ttt.eval.paired import select_probe_position, sequence_documents
+
+    assert 0 < probe_tokens <= seq_len, f"probe_tokens {probe_tokens} must be in (0, {seq_len}]"
+    ds = TokenSequenceDataset(data_dir, "val", seq_len)
+    order = _shard_indices(len(ds), shuffle=True, seed=seed, rank=0, world_size=1)
+    docs = sequence_documents(np.asarray(ds.tokens), ds.bos_token_id, seq_len, order)
+    pos = select_probe_position(docs, min(n_eval, len(order)))
+    item = ds[order[pos]]
+    batch = {k: item[k][:probe_tokens].unsqueeze(0) for k in ("input_ids", "targets", "loss_mask")}
+    info = {"position_in_eval_order": pos, "sequence_index": order[pos], "document": docs[pos],
+            "tokens": probe_tokens, "evaluated_documents": len(set(docs[:n_eval]))}
+    return batch, info

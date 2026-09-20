@@ -81,3 +81,23 @@ def test_clustering_collapses_sequences_from_one_document():
 def test_clustered_equals_plain_when_every_sequence_is_its_own_document():
     diffs = [0.1, 0.3, 0.2, 0.4]
     assert clustered_paired_stats(diffs, [0, 1, 2, 3]) == paired_stats(diffs)
+
+
+# ---------------------------------------------------------------- forgetting-probe choice
+def test_probe_comes_from_a_document_no_evaluated_sequence_touches():
+    from ttt.eval.paired import select_probe_position
+
+    #            evaluated (n_eval=3)   candidates ...
+    docs = [4, 4, 7,                    7, 4, 9, 2]
+    # position 3 shares book 7 and position 4 shares book 4 with evaluated sequences, so
+    # the first genuinely unrelated candidate is position 5 (book 9).
+    assert select_probe_position(docs, n_eval=3) == 5
+
+
+def test_probe_selection_fails_loudly_when_every_candidate_is_contaminated():
+    from ttt.eval.paired import select_probe_position
+
+    with pytest.raises(AssertionError, match="no held-out sequence"):
+        select_probe_position([1, 2, 1, 2, 2], n_eval=2)
+    with pytest.raises(AssertionError, match="no held-out sequence"):
+        select_probe_position([1, 2], n_eval=2)   # nothing left after the evaluated ones

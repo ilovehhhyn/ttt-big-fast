@@ -28,7 +28,8 @@ from ttt.model.naming import ParamSplit
 
 # Arguments that do not influence the trained weights. Everything else must match for a
 # resume to be the same experiment.
-OPERATIONAL_ARGS = frozenset({"out", "ckpt", "device", "hf_cache", "eval_sequences", "eval_ttt_off"})
+OPERATIONAL_ARGS = frozenset({"out", "ckpt", "device", "hf_cache", "eval_sequences", "eval_ttt_off",
+                              "forgetting_probe_tokens"})
 
 _FORMAT = 1
 
@@ -80,16 +81,34 @@ def load_checkpoint(
     split: ParamSplit,
     optimizer: torch.optim.Optimizer,
     fingerprint: dict,
+    defaults: dict,
 ) -> tuple[int, list[dict]]:
-    """Restore slow weights and optimizer state in place. Returns (next_step, history)."""
+    """Restore slow weights and optimizer state in place. Returns (next_step, history).
+
+    `defaults` maps each current setting to its default value. It resolves one case the
+    fingerprint alone cannot: a setting that did not exist when the checkpoint was written.
+    Such a setting cannot have influenced that run, so the resume is the same experiment
+    exactly when the setting is still at its default. (Jobs wait days in the queue while
+    the code moves on; without this rule every new flag would strand their checkpoints.)
+    A setting the checkpoint has but the code no longer knows is always refused.
+    """
     blob = torch.load(Path(path), map_location="cpu", weights_only=False)
     assert blob["format"] == _FORMAT, f"checkpoint format {blob['format']} != {_FORMAT}"
 
     # Same experiment? Name every differing setting: a resume under changed settings
     # would splice two experiments into one result.
     saved = blob["fingerprint"]
-    differing = {k: (saved.get(k), fingerprint.get(k))
-                 for k in sorted(set(saved) | set(fingerprint)) if saved.get(k) != fingerprint.get(k)}
+    differing = {}
+    for k in sorted(set(saved) | set(fingerprint)):
+        if k not in saved:
+            # Added since the checkpoint: acceptable only at its default.
+            assert k in defaults, f"no default known for setting {k!r}, which the checkpoint predates"
+            if fingerprint[k] != defaults[k]:
+                differing[k] = ("<did not exist>", fingerprint[k])
+        elif k not in fingerprint:
+            differing[k] = (saved[k], "<no longer exists>")
+        elif saved[k] != fingerprint[k]:
+            differing[k] = (saved[k], fingerprint[k])
     assert not differing, f"checkpoint was written under different settings (saved, now): {differing}"
 
     # Same parameter set, same shapes?

@@ -81,3 +81,22 @@ def clustered_paired_stats(diffs: list[float], clusters: list[int]) -> dict:
     for d, c in zip(diffs, clusters, strict=True):
         by_cluster[c].append(d)
     return paired_stats([sum(v) / len(v) for _, v in sorted(by_cluster.items())])
+
+
+def select_probe_position(docs_in_eval_order: list[int], n_eval: int) -> int:
+    """Position (in evaluation order) of the sequence to use as the forgetting probe.
+
+    The probe must be text the model did not adapt to, so it has to come from a document
+    that NONE of the `n_eval` evaluated sequences touches: the first such position at or
+    after `n_eval`. A probe sharing a book with an evaluated sequence would measure
+    adaptation to that book, not forgetting.
+    """
+    assert 0 < n_eval, f"n_eval must be positive, got {n_eval}"
+    seen = set(docs_in_eval_order[:n_eval])
+    for pos in range(n_eval, len(docs_in_eval_order)):
+        if docs_in_eval_order[pos] not in seen:
+            return pos
+    raise AssertionError(
+        f"no held-out sequence from an unseen document after the first {n_eval}: the "
+        f"validation split has too few documents for an uncontaminated forgetting probe"
+    )

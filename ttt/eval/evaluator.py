@@ -44,6 +44,7 @@ class EvalResult:
     loss: float  # mean over sequences of the mean-over-chunks loss (Eq. 6)
     token_nll: np.ndarray  # [seq_len] mean per-token-index NLL over sequences (Fig. 6 curve)
     per_sequence_loss: list[float]  # one mean loss per evaluated sequence
+    per_sequence_forgetting: list[float]  # one probe delta-NLL per sequence ([] without a probe)
     num_sequences: int
     forgetting_delta_nll: float | None  # None unless a probe batch was supplied
 
@@ -78,6 +79,7 @@ def evaluate(
 
     loss_sum: Tensor | None = None
     per_sequence: list[float] = []
+    per_sequence_forget: list[float] = []
     nll_sum: Tensor | None = None
     forget_sum: Tensor | None = None
     count = 0
@@ -109,6 +111,7 @@ def evaluate(
             if probe_batch is not None:
                 delta = probe_delta_nll(loop, split, fast_final, probe)
                 forget_sum = delta if forget_sum is None else forget_sum + delta
+                per_sequence_forget.append(float(delta))
             # Kept per sequence, not just aggregated: a paired per-document comparison is
             # the only way to put an error bar on a small between-arm difference, and the
             # averaged Fig. 6 curve cannot supply one.
@@ -128,6 +131,7 @@ def evaluate(
         loss=float(loss_sum / count),
         token_nll=token_nll,
         per_sequence_loss=per_sequence,
+        per_sequence_forgetting=per_sequence_forget,
         num_sequences=count,
         forgetting_delta_nll=None if forget_sum is None else float(forget_sum / count),
     )

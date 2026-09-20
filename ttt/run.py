@@ -32,6 +32,7 @@ import torch
 from ttt.config import Config, InnerConfig, LoRAConfig, OuterConfig, TrainConfig
 from ttt.data.dataset import build_dataloader
 from ttt.eval.evaluator import evaluate
+from ttt.eval.forgetting import build_probe_batch
 from ttt.model.naming import split_parameters
 from ttt.model.transformer import TTTTransformer
 from ttt.optim.inner import build_inner_optimizer
@@ -185,6 +186,9 @@ def main() -> None:
     p.add_argument("--eval-ttt-off", action="store_true",
                    help="also evaluate the SAME trained weights with the inner loop off, "
                         "isolating what test-time training contributes at inference")
+    p.add_argument("--forgetting-probe-tokens", type=int, default=0,
+                   help="score this many tokens of UNRELATED held-out text under the fast weights "
+                        "left by each evaluated sequence and report NLL(W_T) - NLL(W_0); 0 = off")
     p.add_argument("--eval-sequences", type=int, default=64)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
@@ -212,8 +216,9 @@ def main() -> None:
         ckpt = Path(args.ckpt) if args.ckpt else Path(args.out).with_suffix(".ckpt")
         assert ckpt != Path(args.out), f"--ckpt and --out must differ, both are {ckpt}"
         if ckpt.exists():
-            start_step, history = load_checkpoint(ckpt, split=split, optimizer=opt,
-                                                  fingerprint=fingerprint)
+            start_step, history = load_checkpoint(
+                ckpt, split=split, optimizer=opt, fingerprint=fingerprint,
+                defaults=training_fingerprint({k: p.get_default(k) for k in vars(args)}))
             assert 0 <= start_step <= args.steps, f"checkpoint step {start_step} outside [0, {args.steps}]"
             assert len(history) == start_step, f"{len(history)} logged steps for checkpoint step {start_step}"
             print(f"[resume] {ckpt}: continuing at step {start_step}/{args.steps}", flush=True)
@@ -243,11 +248,20 @@ def main() -> None:
     # evaluation would sit on text that is trivially predictable for every arm.
     val_loader = build_dataloader(Path(args.data), "val", args.seq_len, 1,
                                   shuffle=True, seed=args.seed, num_workers=2)
+    probe_batch, probe_info = None, None
+    if args.forgetting_probe_tokens > 0:
+        probe_batch, probe_info = build_probe_batch(Path(args.data), args.seq_len, args.seed,
+                                                    args.eval_sequences, args.forgetting_probe_tokens)
+        print(f"[probe] {probe_info}", flush=True)
     t0 = time.perf_counter()
-    ev = evaluate(loop, split, val_loader, max_sequences=args.eval_sequences, device=device)
+    ev = evaluate(loop, split, val_loader, max_sequences=args.eval_sequences,
+                  probe_batch=probe_batch, device=device)
     result["eval"] = {"loss": ev.loss, "num_sequences": ev.num_sequences,
                       "token_nll": ev.token_nll.tolist(),
                       "per_sequence_loss": ev.per_sequence_loss,
+                      "forgetting_delta_nll": ev.forgetting_delta_nll,
+                      "per_sequence_forgetting": ev.per_sequence_forgetting,
+                      "forgetting_probe": probe_info,
                       "seconds": time.perf_counter() - t0}
     if args.eval_ttt_off:
         # SAME trained slow weights, inner loop switched off. This is the only comparison
