@@ -20,12 +20,11 @@ Usage:
 
 from __future__ import annotations
 
-from dataclasses import replace
 
 import argparse
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import torch
@@ -170,6 +169,9 @@ def main() -> None:
     p.add_argument("--lora-targets", default="wq,wk,wv,wo,w1,w2,w3",
                    help="w1,w2,w3 put LoRA on the fast MLPs, meta-learning a rank-r shift "
                         "of the fast-weight initialisation W0")
+    p.add_argument("--eval-ttt-off", action="store_true",
+                   help="also evaluate the SAME trained weights with the inner loop off, "
+                        "isolating what test-time training contributes at inference")
     p.add_argument("--eval-sequences", type=int, default=64)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
@@ -213,6 +215,26 @@ def main() -> None:
                       "token_nll": ev.token_nll.tolist(),
                       "per_sequence_loss": ev.per_sequence_loss,
                       "seconds": time.perf_counter() - t0}
+    if args.eval_ttt_off:
+        # SAME trained slow weights, inner loop switched off. This is the only comparison
+        # that isolates test-time training itself: an inner_lr=0 *training* run learns a
+        # DIFFERENT (non-meta-learned) LoRA, so it measures the whole system against plain
+        # fine-tuning, not the contribution of TTT at inference.
+        off_cfg = Config(model=cfg.model, inner=replace(cfg.inner, lr_rms=0.0),
+                         outer=cfg.outer, train=cfg.train)
+        off_loop = TTTInnerLoop(model, off_cfg, build_inner_optimizer(off_cfg.inner))
+        off_loader = build_dataloader(Path(args.data), "val", args.seq_len, 1,
+                                      shuffle=True, seed=args.seed, num_workers=2)
+        t1 = time.perf_counter()
+        ev_off = evaluate(off_loop, split, off_loader, max_sequences=args.eval_sequences,
+                          device=device)
+        result["eval_ttt_off"] = {"loss": ev_off.loss, "num_sequences": ev_off.num_sequences,
+                                  "token_nll": ev_off.token_nll.tolist(),
+                                  "per_sequence_loss": ev_off.per_sequence_loss,
+                                  "seconds": time.perf_counter() - t1}
+        print(f"[eval] arm={args.arm} TTT-OFF loss={ev_off.loss:.4f} "
+              f"delta_from_ttt={ev_off.loss - ev.loss:+.4f}", flush=True)
+
     if torch.cuda.is_available():
         result["peak_gib"] = torch.cuda.max_memory_allocated() / 2**30
     print(f"[eval] arm={args.arm} loss={ev.loss:.4f} n={ev.num_sequences} "
