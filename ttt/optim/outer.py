@@ -136,7 +136,7 @@ def inner_lr_scale_at_step(step: int, cfg: InnerConfig, total_steps: int) -> flo
         W = round(cfg.lr_warmup_frac * total_steps)
 
         W == 0        scale = 1.0
-        step < W      scale = 0.1 + 0.9 * step / W      (0.1 at step 0)
+        step < W      scale = i + (1 - i) * step / W    (i = cfg.ilr_init at step 0)
         step >= W     scale = 1.0
 
     A cold inner LR at the start of meta-training keeps the first outer steps
@@ -150,7 +150,7 @@ def inner_lr_scale_at_step(step: int, cfg: InnerConfig, total_steps: int) -> flo
         return 1.0  # frac == 0: warmup disabled on purpose
     if step >= warmup:
         return 1.0
-    return 0.1 + 0.9 * step / warmup
+    return cfg.ilr_init + (1.0 - cfg.ilr_init) * step / warmup
 
 
 def set_lr(optimizer: torch.optim.Optimizer, lr: float) -> None:

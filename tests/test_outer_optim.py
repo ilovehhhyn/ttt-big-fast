@@ -256,3 +256,20 @@ def test_zero_length_warmup_is_an_error_not_a_silent_skip():
     assert resolve_warmup(0.1, 20, "warmup_frac") == 2
     assert lr_at_step(0, OuterConfig(lr=4e-4, total_steps=20)) == 0.0
     assert inner_lr_scale_at_step(0, InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3), 20) == 0.1
+
+
+def test_ilr_init_is_configurable_and_default_preserves_prior_behaviour():
+    """ilr_init exposes what was a hardcoded 0.1, without changing existing results.
+
+    e2e's own 760m/32K extension config uses ilr_init: 1 (no inner-LR warmup), so this
+    is a deliberate deviation and belongs in the config where it can be swept, not
+    buried as a literal in the schedule.
+    """
+    base = InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3)
+    assert base.ilr_init == 0.1
+    assert inner_lr_scale_at_step(0, base, 20) == pytest.approx(0.1)
+    assert inner_lr_scale_at_step(2, base, 20) == pytest.approx(1.0)
+
+    # ilr_init=1 reproduces e2e's setting: the multiplier is 1.0 from the very first step.
+    like_e2e = InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3, ilr_init=1.0)
+    assert all(inner_lr_scale_at_step(s, like_e2e, 20) == pytest.approx(1.0) for s in range(4))

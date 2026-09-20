@@ -137,7 +137,13 @@ class InnerConfig:
     warm_start: bool = True
     learned_lr: bool = True  # per-tensor log-multiplier, a slow parameter
     delta_decay: float = 0.0  # lambda: W <- W0 + (1-lambda)(W - W0) before each step
-    lr_warmup_frac: float = 0.1  # fraction of outer steps to ramp lr_rms 0.1x -> 1x
+    lr_warmup_frac: float = 0.1  # fraction of outer steps to ramp lr_rms ilr_init -> 1x
+    # e2e's ilr_init. DELIBERATE DEVIATION: their 760m/32K extension config sets
+    # ilr_init: 1 (no inner-LR warmup at all). We start at 0.1 because our W_0 is a
+    # pretrained Llama that was never trained to receive fast-weight updates, so the
+    # first outer steps need the fast weights to move gently while the LoRA factors are
+    # still near zero. Kept configurable so the deviation is visible and testable.
+    ilr_init: float = 0.1
     clip_tau: float = 1.0  # clipped_sgd only: global-norm clip threshold (e2e uses 1.0)
 
     def __post_init__(self) -> None:
