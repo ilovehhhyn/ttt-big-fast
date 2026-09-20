@@ -772,14 +772,13 @@ The batch ladder holds steps fixed, so larger batches also see more tokens; it m
 "more compute per step", not batch size in isolation. The 60- and 150-step runs do not yet
 have budget-matched `--inner none` controls queued.
 
-Short runs whose results exist on the cluster but had not been read when this was written
-(the SSH session dropped): `C_32k_q10_repeat` (noise floor, job 14194873),
-`C_32k_ctl_none10` (job 14195736), and the login-node evaluations `B_32k_adamw_lr7e-6`,
-`B_32k_adamw_lr2e-5`, `A_32k_fullattn`, `B_32k_fullattn`, plus an arm D (full-slow) memory
-probe at 32K (`logs/login_armD_probe_32k.log`).
+The short runs that were unread when this list was first written (`C_32k_q10_repeat`,
+`C_32k_ctl_none10`, the AdamW grid, `A_32k_fullattn`, `B_32k_fullattn`, the arm D probe) have
+all been read; their results are in "2026-09-20, later" above and in "Checkpoint / resume on
+real hardware".
 
-Not started: arm D training (whether it fits one 80 GiB GPU at 32K is what the probe
-measures), arm F (not implemented on the Llama path; `--arm F` now refuses to run), the
+Not started: arm D beyond its 10-step feasibility run (it needs a learning-rate sweep at
+`truncate_bptt=1`), arm F (not implemented on the Llama path; `--arm F` now refuses to run), the
 forgetting probe on the real model (wired into the CLI as `--forgetting-probe-tokens`,
 exercised only on SmolLM2-135M), the decay-toward-W0 sweep, the LoRA rank sweep, Muon, and
 multiple seeds.
