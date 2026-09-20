@@ -29,7 +29,7 @@ from ttt.model.naming import ParamSplit
 # Arguments that do not influence the trained weights. Everything else must match for a
 # resume to be the same experiment.
 OPERATIONAL_ARGS = frozenset({"out", "ckpt", "device", "hf_cache", "eval_sequences", "eval_ttt_off",
-                              "forgetting_probe_tokens"})
+                              "forgetting_probe_tokens", "load_slow"})
 
 _FORMAT = 1
 
@@ -111,14 +111,7 @@ def load_checkpoint(
             differing[k] = (saved[k], fingerprint[k])
     assert not differing, f"checkpoint was written under different settings (saved, now): {differing}"
 
-    # Same parameter set, same shapes?
-    assert set(blob["slow"]) == set(split.slow), (
-        "slow parameter names differ between checkpoint and model: "
-        f"only in checkpoint {sorted(set(blob['slow']) - set(split.slow))[:5]}, "
-        f"only in model {sorted(set(split.slow) - set(blob['slow']))[:5]}"
-    )
-    for k, v in blob["slow"].items():
-        assert v.shape == split.slow[k].shape, f"{k}: checkpoint {tuple(v.shape)} vs model {tuple(split.slow[k].shape)}"
+    _assert_same_slow_set(blob["slow"], split)
 
     # Optimizer state is matched to parameters by POSITION inside each group, so the
     # groups must list the same names in the same order or the moments would be applied
@@ -127,8 +120,41 @@ def load_checkpoint(
         "optimizer param groups differ between checkpoint and model"
     )
 
-    with torch.no_grad():
-        for k, v in blob["slow"].items():
-            split.slow[k].copy_(v)  # copy_ casts to the parameter's device and dtype
+    _copy_slow(blob["slow"], split)
     optimizer.load_state_dict(blob["optimizer"])
     return int(blob["step"]), list(blob["history"])
+
+
+def _assert_same_slow_set(saved: dict, split: ParamSplit) -> None:
+    """Same parameter names, same shapes: weights are only meaningful in the architecture
+    and slow set they were trained in."""
+    assert set(saved) == set(split.slow), (
+        "slow parameter names differ between checkpoint and model: "
+        f"only in checkpoint {sorted(set(saved) - set(split.slow))[:5]}, "
+        f"only in model {sorted(set(split.slow) - set(saved))[:5]}"
+    )
+    for k, v in saved.items():
+        assert v.shape == split.slow[k].shape, f"{k}: checkpoint {tuple(v.shape)} vs model {tuple(split.slow[k].shape)}"
+
+
+def _copy_slow(saved: dict, split: ParamSplit) -> None:
+    with torch.no_grad():
+        for k, v in saved.items():
+            split.slow[k].copy_(v)  # copy_ casts to the parameter's device and dtype
+
+
+def load_slow_weights(path: Path, *, split: ParamSplit) -> dict:
+    """Load ONLY the trained slow weights, for evaluation. Returns their provenance.
+
+    This is not a resume. A resume must continue the same experiment, so it demands
+    identical settings. Evaluating trained weights under a different inner rule is a
+    different, legitimate question -- e.g. slow weights trained WITHOUT the inner loop,
+    evaluated WITH it -- so no settings are compared here. The architecture and slow set
+    must still match, and the checkpoint's step and settings are returned so the result
+    file records exactly which weights were evaluated.
+    """
+    blob = torch.load(Path(path), map_location="cpu", weights_only=False)
+    assert blob["format"] == _FORMAT, f"checkpoint format {blob['format']} != {_FORMAT}"
+    _assert_same_slow_set(blob["slow"], split)
+    _copy_slow(blob["slow"], split)
+    return {"path": str(path), "step": int(blob["step"]), "fingerprint": dict(blob["fingerprint"])}

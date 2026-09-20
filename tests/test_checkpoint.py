@@ -198,3 +198,39 @@ def test_flag_removed_since_the_checkpoint_is_refused(tmp_path):
                     fingerprint=dict(FP, old_flag=3))
     with pytest.raises(AssertionError, match="old_flag"):
         load_checkpoint(ckpt, split=split, optimizer=opt, fingerprint=FP, defaults={})
+
+
+def test_load_slow_weights_restores_weights_only(tmp_path):
+    """Evaluating trained slow weights under a DIFFERENT inner rule is a legitimate question
+    (it fills the 2x2 of 'trained with/without the inner loop' x 'evaluated with/without').
+    Unlike a resume it must not demand matching settings, and it must not touch the optimizer."""
+    from ttt.train.checkpoint import load_slow_weights
+
+    cfg, model, split, loop, opt = build()
+    _train(Trainer(cfg, model, split, loop, opt, _stream(cfg, 0), device=CPU), range(1, 3))
+    want = {k: v.detach().clone() for k, v in split.slow.items()}
+    ckpt = tmp_path / "run.ckpt"
+    save_checkpoint(ckpt, step=3, split=split, optimizer=opt, history=[], fingerprint=FP)
+
+    cfg, model, split, loop, opt = build()
+    with torch.no_grad():
+        for v in split.slow.values():
+            v.add_(torch.randn_like(v))
+    info = load_slow_weights(ckpt, split=split)
+    for k, v in split.slow.items():
+        assert torch.equal(v, want[k]), k
+    assert info["step"] == 3 and info["fingerprint"] == FP, "provenance must travel with the weights"
+    assert not opt.state_dict()["state"], "loading weights for evaluation must not create optimizer state"
+
+
+def test_load_slow_weights_refuses_a_different_parameter_set(tmp_path):
+    from ttt.train.checkpoint import load_slow_weights
+
+    cfg, model, split, loop, opt = build()
+    ckpt = tmp_path / "run.ckpt"
+    save_checkpoint(ckpt, step=1, split=split, optimizer=opt, history=[], fingerprint=FP)
+    blob = torch.load(ckpt, weights_only=False)
+    del blob["slow"][sorted(blob["slow"])[0]]
+    torch.save(blob, ckpt)
+    with pytest.raises(AssertionError, match="slow parameter names"):
+        load_slow_weights(ckpt, split=split)

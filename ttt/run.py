@@ -39,7 +39,7 @@ from ttt.model.naming import split_parameters
 from ttt.model.transformer import TTTTransformer
 from ttt.optim.inner import build_inner_optimizer
 from ttt.optim.outer import build_outer_optimizer
-from ttt.train.checkpoint import load_checkpoint, save_checkpoint, training_fingerprint
+from ttt.train.checkpoint import load_checkpoint, load_slow_weights, save_checkpoint, training_fingerprint
 from ttt.train.inner_loop import TTTInnerLoop
 from ttt.train.trainer import Trainer
 from ttt.utils.hf_import import MIRROR_REPO, build_llama_ttt
@@ -182,6 +182,9 @@ def main() -> None:
     p.add_argument("--lora-targets", default="wq,wk,wv,wo,w1,w2,w3",
                    help="w1,w2,w3 put LoRA on the fast MLPs, meta-learning a rank-r shift "
                         "of the fast-weight initialisation W0")
+    p.add_argument("--load-slow", default=None,
+                   help="EVAL ONLY: evaluate the trained slow weights stored in this checkpoint, under "
+                        "whatever inner rule this command specifies (not a resume: settings may differ)")
     p.add_argument("--ckpt", default=None,
                    help="checkpoint file, written after every step and resumed from if it exists "
                         "(default: --out with a .ckpt suffix, so every training run is resumable)")
@@ -204,6 +207,13 @@ def main() -> None:
 
     result = {"arm": args.arm, "mode": args.mode, "args": vars(args), "param_counts": counts,
               "num_chunks": cfg.num_chunks, "remat_group": loop.group}
+
+    if args.load_slow:
+        # Evaluating trained weights under a chosen inner rule. Training from them is a
+        # resume and goes through --ckpt, which checks that the settings are unchanged.
+        assert args.mode == "eval", "--load-slow is for --mode eval; use --ckpt to resume training"
+        result["loaded_slow"] = load_slow_weights(Path(args.load_slow), split=split)
+        print(f"[load-slow] {args.load_slow}: step {result['loaded_slow']['step']}", flush=True)
 
     if args.mode == "train":
         opt = build_outer_optimizer(split.slow, cfg.outer)
