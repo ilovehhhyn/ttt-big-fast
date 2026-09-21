@@ -129,3 +129,18 @@ def test_inner_lr_has_no_default_when_an_inner_optimizer_is_active():
     assert resolve_inner_lr("normalized_sgd", 4e-6) == 4e-6
     assert resolve_inner_lr("normalized_sgd", 0.0) == 0.0     # an explicit zero is a real setting
     assert resolve_inner_lr("none", None) == 0.0              # arm A: no inner optimizer, nothing to set
+
+
+def test_a_finished_result_is_recognised_and_an_unfinished_one_is_not(tmp_path):
+    """Chains of resumable jobs carry spare links; a spare link must see that the run is
+    finished. "Finished" means the evaluation was written, not merely that a file exists."""
+    import json
+
+    from ttt.run import result_is_complete
+
+    out = tmp_path / "r.json"
+    assert not result_is_complete(out)                                   # no file
+    out.write_text(json.dumps({"arm": "C", "history": [{"step": 0}]}))
+    assert not result_is_complete(out)                                   # trained, not evaluated
+    out.write_text(json.dumps({"arm": "C", "history": [], "eval": {"loss": 2.5}}))
+    assert result_is_complete(out)

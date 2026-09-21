@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -62,6 +63,19 @@ ARMS = {
     "D": dict(inner="normalized_sgd", lora_rank=0, slow=("**",)),
     "F": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log")),
 }
+
+
+def result_is_complete(out: Path) -> bool:
+    """True iff `out` already holds a finished result (it has an "eval" block).
+
+    A run longer than any Slurm wall limit is submitted as a chain of resumable links, with
+    a link or two to spare. Once the run has finished, a spare link must do nothing: without
+    this check it would reload the final checkpoint and spend GPU time re-evaluating. A
+    missing or unfinished file (no "eval" block yet) is not complete.
+    """
+    if not out.exists():
+        return False
+    return "eval" in json.loads(out.read_text())
 
 
 def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
@@ -225,6 +239,10 @@ def main() -> None:
     args = p.parse_args()
     assert args.ckpt_every >= 1, f"--ckpt-every must be >= 1, got {args.ckpt_every}"
 
+    if result_is_complete(Path(args.out)):
+        print(f"[done] {args.out} already holds a finished result; nothing to do. "
+              f"(Delete it, or choose another --out, to run again.)", flush=True)
+        return
     torch.manual_seed(args.seed)
     cfg, model, split, loop, device = build_everything(args)
     counts = {k: sum(v.numel() for v in getattr(split, k).values()) for k in ("fast", "slow", "frozen")}
@@ -330,7 +348,11 @@ def main() -> None:
           f"peak={result.get('peak_gib', 0):.1f}GiB", flush=True)
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out).write_text(json.dumps(result, indent=2))
+    # Atomic, like the checkpoint: a job killed mid-write must not leave a truncated file
+    # that a later link of the chain would then fail to parse.
+    tmp = Path(args.out).with_name(Path(args.out).name + ".tmp")
+    tmp.write_text(json.dumps(result, indent=2))
+    os.replace(tmp, args.out)
     print(f"[run] wrote {args.out}", flush=True)
 
 
