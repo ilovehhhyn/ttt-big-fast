@@ -27,6 +27,7 @@ from torch import Tensor
 from ttt.config import Config
 from ttt.model.naming import ParamSplit
 from ttt.optim.outer import inner_lr_scale_at_step, lr_at_step, set_lr
+from ttt.train.distributed import Dist, all_reduce_sum_grads_, all_reduce_sum_scalar
 from ttt.train.inner_loop import TTTInnerLoop
 
 
@@ -50,7 +51,7 @@ class StepMetrics:
 class Trainer:
     def __init__(self, cfg: Config, model, split: ParamSplit, loop: TTTInnerLoop,
                  optimizer: torch.optim.Optimizer, train_iter, *, device: torch.device,
-                 empty_cache: bool = False) -> None:
+                 empty_cache: bool = False, dist: Dist = Dist()) -> None:
         self.cfg = cfg
         self.model = model
         self.split = split
@@ -60,8 +61,15 @@ class Trainer:
         self.device = device
         self.empty_cache = empty_cache and device.type == "cuda"
         self.slow_params: list[Tensor] = [v for _, v in sorted(split.slow.items())]
-        self.seqs_per_step = cfg.train.seqs_per_step
+        self.seqs_per_step = cfg.train.seqs_per_step  # GLOBAL: summed over all ranks
         assert self.seqs_per_step >= 1
+        # Data parallelism over sequences (see ttt/train/distributed.py). `train_iter` must be
+        # this rank's shard; each rank processes seqs_per_step / world_size sequences per step.
+        self.dist = dist
+        assert self.seqs_per_step % dist.world_size == 0, (
+            f"sequences per step ({self.seqs_per_step}) must be divisible by world_size ({dist.world_size})"
+        )
+        self.local_seqs = self.seqs_per_step // dist.world_size
 
     def _lr_mult(self) -> dict[str, Tensor] | None:
         """Learned per-tensor inner LR, or None when disabled."""
@@ -77,7 +85,7 @@ class Trainer:
 
         self.optimizer.zero_grad(set_to_none=True)
         total = 0.0
-        for _ in range(self.seqs_per_step):
+        for _ in range(self.local_seqs):
             batch = next(self.train_iter)
             ids = batch["input_ids"].to(self.device)
             tgt = batch["targets"].to(self.device)
@@ -100,6 +108,11 @@ class Trainer:
                 del out
                 torch.cuda.empty_cache()
 
+        # Every rank scaled its shard by the GLOBAL 1/seqs_per_step, so the SUM over ranks is
+        # the single-process gradient. Clipping happens after it, on identical gradients, so
+        # every rank takes the identical step.
+        all_reduce_sum_grads_(self.slow_params, self.dist)
+        total = all_reduce_sum_scalar(total, self.dist, self.device)
         gnorm = torch.nn.utils.clip_grad_norm_(self.slow_params, self.cfg.outer.grad_clip)
         self.optimizer.step()
 

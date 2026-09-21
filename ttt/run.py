@@ -41,6 +41,7 @@ from ttt.model.transformer import TTTTransformer
 from ttt.optim.inner import build_inner_optimizer
 from ttt.optim.outer import build_outer_optimizer
 from ttt.train.checkpoint import load_checkpoint, load_slow_weights, save_checkpoint, training_fingerprint
+from ttt.train.distributed import init_from_env
 from ttt.train.inner_loop import TTTInnerLoop
 from ttt.train.trainer import Trainer
 from ttt.utils.hf_import import MIRROR_REPO, build_llama_ttt
@@ -243,11 +244,22 @@ def main() -> None:
         print(f"[done] {args.out} already holds a finished result; nothing to do. "
               f"(Delete it, or choose another --out, to run again.)", flush=True)
         return
-    torch.manual_seed(args.seed)
+    # Data parallelism over sequences (ttt/train/distributed.py): one process per GPU, launched
+    # by srun. A single process is world_size 1 and creates no group.
+    dist_info, local_rank = init_from_env("cuda" if args.device.startswith("cuda") else "cpu")
+    if dist_info.world_size > 1:
+        assert args.mode == "train", "multi-process runs are for training; evaluate with one process"
+        if args.device.startswith("cuda"):
+            torch.cuda.set_device(local_rank)
+            args.device = f"cuda:{local_rank}"
+    main_rank = dist_info.is_main
+    torch.manual_seed(args.seed)  # identical on every rank: they must build identical models
     cfg, model, split, loop, device = build_everything(args)
     counts = {k: sum(v.numel() for v in getattr(split, k).values()) for k in ("fast", "slow", "frozen")}
-    print(f"[run] arm={args.arm} fast={counts['fast']:,} slow={counts['slow']:,} frozen={counts['frozen']:,}", flush=True)
-    print(f"[run] chunks={cfg.num_chunks} remat_group={loop.group} seqs_per_step={cfg.train.seqs_per_step}", flush=True)
+    if main_rank:
+        print(f"[run] arm={args.arm} fast={counts['fast']:,} slow={counts['slow']:,} frozen={counts['frozen']:,}", flush=True)
+        print(f"[run] chunks={cfg.num_chunks} remat_group={loop.group} seqs_per_step={cfg.train.seqs_per_step} "
+              f"world_size={dist_info.world_size}", flush=True)
 
     result = {"arm": args.arm, "mode": args.mode, "args": vars(args), "param_counts": counts,
               "num_chunks": cfg.num_chunks, "remat_group": loop.group}
@@ -266,6 +278,9 @@ def main() -> None:
         # restart continues exactly where it stopped (see ttt/train/checkpoint.py).
         start_step, history = 0, []
         fingerprint = training_fingerprint(vars(args))
+        # Which sequences a step sees depends on the sharding, so a resume must use the same
+        # number of ranks. "device" is operational and already excluded (cuda:0 vs cuda:3).
+        fingerprint["world_size"] = dist_info.world_size
         # Resumable BY DEFAULT: the path is derived from --out, so a run is recoverable
         # even when nobody thought to ask for it. A leftover checkpoint from a different
         # experiment at the same --out is rejected by the fingerprint check, not resumed.
@@ -274,30 +289,44 @@ def main() -> None:
         if ckpt.exists():
             start_step, history = load_checkpoint(
                 ckpt, split=split, optimizer=opt, fingerprint=fingerprint,
-                defaults=training_fingerprint({k: p.get_default(k) for k in vars(args)}))
+                defaults={**training_fingerprint({k: p.get_default(k) for k in vars(args)}), "world_size": 1})
             assert 0 <= start_step <= args.steps, f"checkpoint step {start_step} outside [0, {args.steps}]"
             assert len(history) == start_step, f"{len(history)} logged steps for checkpoint step {start_step}"
-            print(f"[resume] {ckpt}: continuing at step {start_step}/{args.steps}", flush=True)
+            if main_rank:
+                print(f"[resume] {ckpt}: continuing at step {start_step}/{args.steps}", flush=True)
         result["resumed_from_step"] = start_step
         # Sequences already consumed = steps done * sequences per step; the loader
         # continues the same stream from there.
+        assert cfg.train.seqs_per_step % dist_info.world_size == 0, (
+            f"sequences per step ({cfg.train.seqs_per_step}) must be divisible by the number of ranks "
+            f"({dist_info.world_size})"
+        )
+        local_seqs = cfg.train.seqs_per_step // dist_info.world_size
+        # Rank r reads order[r::R]; after `start_step` steps it has consumed start_step *
+        # local_seqs of ITS items, so that is where its stream resumes.
         train_loader = build_dataloader(Path(args.data), "train", args.seq_len, 1,
                                         shuffle=True, seed=args.seed, num_workers=2,
-                                        start_sequence=start_step * cfg.train.seqs_per_step)
+                                        rank=dist_info.rank, world_size=dist_info.world_size,
+                                        start_sequence=start_step * local_seqs)
         it = iter(_cycle(train_loader))
         trainer = Trainer(cfg, model, split, loop, opt, it, device=device,
-                          empty_cache=args.empty_cache)
+                          empty_cache=args.empty_cache, dist=dist_info)
         for step in range(start_step, args.steps):
             m = trainer.train_step(step)
             history.append(m.as_log())
             # The history is truncated to the checkpointed step on resume by construction:
             # it is saved together with the weights, so a resume replays steps after it.
-            if (step + 1) % args.ckpt_every == 0 or step == args.steps - 1:
+            if main_rank and ((step + 1) % args.ckpt_every == 0 or step == args.steps - 1):
                 save_checkpoint(ckpt, step=step + 1, split=split, optimizer=opt,
                                 history=history, fingerprint=fingerprint)
-            if step % 5 == 0 or step == args.steps - 1:
+            if main_rank and (step % 5 == 0 or step == args.steps - 1):
                 print(f"[train] {m.as_log()}", flush=True)
         result["history"] = history
+        result["world_size"] = dist_info.world_size
+        if not main_rank:
+            # Training is done and every rank holds the same weights. Evaluation involves no
+            # collective, so the other ranks leave and the main rank evaluates alone.
+            return
 
     # Shuffle the validation set with a FIXED seed. Deterministic, but it spreads the
     # evaluated sequences across documents instead of walking the first one. Without
