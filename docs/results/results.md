@@ -823,3 +823,95 @@ and score the answer tokens with the fact PRESENT against ABSENT. For a sliding 
 test-time training that difference is zero by construction, full attention gives the ceiling,
 and whatever test-time training recovers is memory and nothing else: repair of the broken
 window helps all tokens alike and cancels in the difference.
+
+## 2026-09-21: window k = 1024, and data parallelism
+
+All on PG-19 at T = 32768 with the same 32 validation sequences (22 books) as every earlier
+32K result; chunk b = 1024, so k >= b still holds, with equality.
+
+### Nothing trained, k = 1024
+
+| run | inner lr | loss |
+|---|---|---|
+| arm A (no TTT) | - | 4.9895 |
+| arm B (normalized SGD) | 2e-6 | 4.6065 |
+| arm B | 4e-6 | 4.5232 |
+| arm B | 7e-6 | 4.5199 |
+| arm B | 2e-5 | 4.7039 |
+| arm B | 5e-5 | 6.9575 |
+
+The un-tuned model is far more broken at this window (4.9895 against 3.7119 at k = 8192 and
+2.3092 with full attention), TTT alone recovers more (0.47 nats at the best rate), and the
+inner-LR optimum has not moved: 4e-6 to 7e-6, diverging by 5e-5. 4e-6 is kept so that windows
+can be compared at one inner rule. As at k = 8192, most of what TTT recovers here is repair of
+the broken window, not memory: the ceiling for memory at this window is +0.0992 nats.
+
+### A smaller window affords a longer truncation window
+
+`scripts/memory_probe.py --window 1024` (one sequence, no optimizer step):
+
+| `truncate_bptt` | peak at k = 1024 | peak at k = 8192 |
+|---|---|---|
+| 2 | 24.70 GiB | 49.57 GiB |
+| 4 | 41.38 GiB | out of memory |
+| 8 | 74.86 GiB | - |
+
+So at k = 1024 the meta-gradient can span 4 inner steps instead of 2 on one 80 GiB GPU. The
+real 10-step training run at `truncate_bptt=4` peaked at 42.0 GiB (its result file), close to
+the probe; the 18 GiB gap between probe and trainer seen at k = 8192 does not appear here. A
+step takes 55 seconds (4 sequences) against 132 at k = 8192; the `--inner none` control, 30.
+
+### Arm C at k = 1024, 10 steps, and the 2x2 behind H1
+
+`truncate_bptt=4`, otherwise the settings of the k = 8192 runs (normalized SGD 4e-6, outer lr
+4e-4, LoRA r = 64 on attention and MLPs, 4 sequences per step). The plain fine-tuned weights
+were evaluated with TTT through `--load-slow`; their TTT-off evaluation reproduced the
+control's own number (3.0682), so the right weights were loaded.
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop | 2.9440 | 3.0041 |
+| plain fine-tune | 3.0212 | 3.0682 |
+
+`scripts/two_by_two.py`, per document (32 sequences, 22 books), positive = lower loss:
+
+| effect | k = 1024 | 95% CI | documents positive | k = 8192 (from "The 2x2 behind H1") |
+|---|---|---|---|---|
+| TTT at eval, on meta-learned weights | +0.0559 | [+0.0467, +0.0651] | 22/22 | +0.0179 |
+| TTT at eval, on plain fine-tuned weights | +0.0433 | [+0.0354, +0.0513] | 22/22 | +0.0164 |
+| training through the inner loop, TTT on | +0.0772 | [+0.0703, +0.0841] | 22/22 | +0.0247 |
+| training through the inner loop, TTT off | +0.0646 | [+0.0560, +0.0733] | 22/22 | +0.0232 |
+| INTERACTION: does training through the inner loop make TTT more useful? | +0.0126 | [+0.0098, +0.0153] | 22/22 | +0.0015 |
+
+Every effect is about three times its k = 8192 value, and the interaction, the quantity H1 is
+about, is about eight times larger and positive in all 22 books (17 of 22 at k = 8192): at this
+window test-time training is worth 29% more on weights that were trained through the inner
+loop than on plainly fine-tuned ones. This is the first evidence in the project FOR H1's
+mechanism. It is early evidence: 10 steps, one training run per row and no seeds, a truncation
+window (4) that differs from the k = 8192 runs (2), and models that are still about 0.6 nats
+from the healthy level for this window (about 2.39, from "What context beyond the window is
+worth"), so all four cells still sit in the repair regime. A 40-step pair was submitted to see
+whether the interaction grows with training.
+
+### Data parallelism over sequences
+
+The sequences of an outer step are independent, so the step gradient splits across GPUs
+exactly (`ttt/train/distributed.py`): in float64 two processes equal one to 1e-12, and two
+ranks killed with SIGKILL and resumed are bit-identical to two ranks left alone. On real
+hardware, 2 GPUs x 2 sequences against the single-GPU run `C_32k_q10` (same global batch):
+
+- largest per-step loss difference 3.737e-04, the same order as the 2.49e-4 between two
+  single-GPU runs; evaluation 2.668930 against 2.668952;
+- 65.7 seconds per step against 131.9: a factor of 2.0 on 2 GPUs.
+
+The first attempt (job 14236036) trained correctly and was then KILLED during evaluation: srun
+terminates the remaining tasks 60 seconds after the first task exits, and ranks other than 0
+exit once training is done. `srun --wait=0` fixes it. No local test can see launcher behaviour;
+the validation job did, and the orchestrator's gate withheld the 320 GPU-hour submission.
+
+### Where data preparation runs
+
+Tokenisation on the login node was killed three times (exit 137) after about 10 minutes of
+CPU, niced and capped at 4 threads notwithstanding. The login node now only downloads the
+parquet shards (21 GB in 3.5 minutes); `ttt.data.prepare --data-files` reads them offline in CPU
+compute jobs, which started within a second of submission.
