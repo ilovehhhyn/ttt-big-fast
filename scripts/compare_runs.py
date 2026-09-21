@@ -21,8 +21,13 @@ def main() -> None:
     ap.add_argument("reference")
     ap.add_argument("candidate")
     ap.add_argument("--tol", type=float, default=1e-3,
-                    help="largest acceptable |reference - candidate| on any training metric or eval loss")
+                    help="largest acceptable |reference - candidate| on a judged training metric or eval loss")
+    ap.add_argument("--metrics", default=None,
+                    help="comma-separated training metrics the verdict is based on (default: all). The gradient "
+                         "norm of a second-order meta-gradient swings by 1-2%% between two runs of ONE "
+                         "configuration (measured), so a gate on run equivalence should judge 'loss'.")
     a = ap.parse_args()
+    judged = None if a.metrics is None else set(a.metrics.split(","))
 
     ref, cand = json.load(open(a.reference)), json.load(open(a.candidate))
     print(f"reference resumed_from_step={ref.get('resumed_from_step', 0)}  "
@@ -34,12 +39,17 @@ def main() -> None:
     print(f"{'step':>4} {'ref loss':>12} {'cand loss':>12} {'|diff|':>10}")
     for er, ec in zip(hr, hc, strict=True):
         assert er["step"] == ec["step"], (er["step"], ec["step"])
-        for k in er.keys() - WALL_CLOCK:
+        keys = er.keys() - WALL_CLOCK
+        if judged is not None:
+            assert judged <= keys, f"unknown metric(s) {sorted(judged - keys)}; available: {sorted(keys)}"
+            keys = judged
+        for k in keys:
             d = abs(er[k] - ec[k])
             if d > worst:
                 worst, worst_at = d, (er["step"], k)
         print(f"{er['step']:>4} {er['loss']:>12.6f} {ec['loss']:>12.6f} {abs(er['loss'] - ec['loss']):>10.2e}")
-    print(f"largest training-metric difference: {worst:.3e} at (step, metric) = {worst_at}")
+    print(f"largest difference over {'all metrics' if judged is None else sorted(judged)}: "
+          f"{worst:.3e} at (step, metric) = {worst_at}")
 
     ok = worst <= a.tol
     for key in ("eval", "eval_ttt_off"):
