@@ -782,3 +782,44 @@ Not started: arm D beyond its 10-step feasibility run (it needs a learning-rate 
 forgetting probe on the real model (wired into the CLI as `--forgetting-probe-tokens`,
 exercised only on SmolLM2-135M), the decay-toward-W0 sweep, the LoRA rank sweep, Muon, and
 multiple seeds.
+
+## Round 2 plan (2026-09-21): where the thesis has room to show itself
+
+Decided by Helen after the check-in: try a smaller window (k = 1024) with arm C; use a longer
+context or a task with real long-range dependence; try another dataset (SlimPajama); and match
+the reference's 32K extension budget. Nothing in this section is a result yet.
+
+**Matched extension budget (k = 8192, the reference protocol).** 725 steps at 32 sequences per
+step, about 760M tokens: arm C (about 212 GPU-hours at the measured 33 s per sequence) and the
+extension-only control it has to be compared with (`--inner none`, about 111 GPU-hours). Both
+exceed every wall limit on one GPU (24 h, 72 h, 144 h), and a chain of dependent links pays a
+queue wait PER LINK, because Slurm ages a dependent job only once its predecessor ends. So the
+sequences of a step are sharded over 4 GPUs (`ttt/train/distributed.py`,
+`scripts/della/run_arm_ddp.sbatch`): about 53 h and 28 h, one job each, with a spare link.
+Before submitting: a 2-GPU validation of the 4-sequence configuration against `C_32k_q10`
+(same global batch, so it must agree within the 2.5e-4 noise floor).
+
+**k = 1024** (`scripts/della/round2_login.sh`, then short validation jobs). Out-of-window
+context is worth +0.0992 nats per book at this window against +0.0208 at 8192. First, with
+nothing trained: arm A, and an arm B inner-LR scan, since the optimum may move; and arm C's
+training memory at `truncate_bptt` 2, 4 and 8, because a smaller window shrinks the per-window
+backward spike and may afford a longer, less biased truncation window. Then arm C and its
+`--inner none` control at 10 steps, the 2x2 of "The 2x2 behind H1", and longer runs sized from
+those timings.
+
+**Another dataset: SlimPajama** (`DKYoon/SlimPajama-6B`, free and ungated; verified 2026-09-21
+that rows carry `meta.redpajama_set_name`). `scripts/della/round2_data.sh` keeps documents of at
+least 32,769 tokens together with their source domain, using an exact byte-length prefilter so
+that the tokenizer is skipped for nearly every web document. The first question is where
+long-range context is worth the most: `scripts/context_value.py --only-label` per domain
+(books, arXiv, GitHub, ...). Training goes where that ceiling is highest.
+
+**Longer context: PG-19 at 128K.** Only books of at least 131,073 tokens are kept, so a sequence
+never spans two books. Same first question: what is context beyond the window worth at 128K?
+
+**A task with real long-range dependence (proposed, not built).** Fact recall beyond the window:
+insert a sentence stating a random fact early in a sequence, query it more than k tokens later,
+and score the answer tokens with the fact PRESENT against ABSENT. For a sliding window without
+test-time training that difference is zero by construction, full attention gives the ceiling,
+and whatever test-time training recovers is memory and nothing else: repair of the broken
+window helps all tokens alike and cancels in the difference.
