@@ -26,6 +26,7 @@ COMMON="--mode eval --data $DATA --seq-len 131072 --chunk 1024 --window 8192 --p
         --fast-blocks 4 --remat-group 1 --remat-blocks --dtype bf16 --eval-sequences 16"
 [ -e "$RES/A_128k.json" ] || .venv/bin/python -u -m ttt.run $COMMON --arm A --out "$RES/A_128k.json"
 [ -e "$RES/B_128k.json" ] || .venv/bin/python -u -m ttt.run $COMMON --arm B --inner normalized_sgd --inner-lr 4e-6 --out "$RES/B_128k.json"
-[ -e "$RES/context_value_128k_s8192.json" ] || .venv/bin/python -u scripts/context_value.py --data "$DATA" \
-    --seq-len 131072 --segment 8192 --eval-sequences 12 --out "$RES/context_value_128k_s8192.json"
+# Question 1 is scripts/della/cv_128k.sbatch: one full-attention float32 forward at 128K takes
+# about 6 minutes on an A100, so 12 sequences do not fit in this job (job 14238061 was
+# cancelled at 46 minutes with 5 of 12 scored and nothing saved).
 echo "=== eval_128k finished ==="

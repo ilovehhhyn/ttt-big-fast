@@ -67,6 +67,9 @@ def main() -> None:
     ap.add_argument("--segment", type=int, default=8192, help="S: restart length = the window being bounded")
     ap.add_argument("--eval-sequences", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--skip-sequences", type=int, default=0,
+                    help="score sequences [skip, skip + eval-sequences) of the evaluation order (after --only-label), "
+                         "so that a large sample can be scored as several short, disjoint runs")
     ap.add_argument("--only-label", default=None,
                     help="evaluate only sequences whose document carries this label (corpora prepared "
                          "with --label-field, e.g. RedPajamaArXiv), so each domain gets its own sample")
@@ -91,7 +94,9 @@ def main() -> None:
         keep = [i for i, d in enumerate(docs) if doc_labels[d] == a.only_label]
         assert keep, f"no validation sequence has label {a.only_label!r}; labels present: {sorted(set(doc_labels))}"
         order, docs = [order[i] for i in keep], [docs[i] for i in keep]
-    order, docs = order[: a.eval_sequences], docs[: a.eval_sequences]
+    assert 0 <= a.skip_sequences < len(order), f"--skip-sequences {a.skip_sequences} leaves none of {len(order)} sequences"
+    piece = slice(a.skip_sequences, a.skip_sequences + a.eval_sequences)
+    order, docs = order[piece], docs[piece]
     assert len(set(docs)) >= 2, f"only {len(set(docs))} document(s) selected: a per-document interval needs at least 2"
 
     full = np.zeros((len(order), T), dtype=np.float64)
@@ -107,7 +112,11 @@ def main() -> None:
 
     # Compare only tokens that (a) lie in segments j >= 1, so older context exists, and
     # (b) have q >= q_min recent tokens in the restart condition.
-    report = {"args": vars(a), "documents": docs, "distinct_documents": len(set(docs)), "bands": {}}
+    # per_sequence: mean NLL over ALL T tokens of each sequence, so that other per-sequence
+    # quantities (e.g. a windowed model's loss on the same sequence) can be set against it.
+    report = {"args": vars(a), "documents": docs, "distinct_documents": len(set(docs)), "bands": {},
+              "sequence_indices": [int(i) for i in order],
+              "per_sequence": {"full": full.mean(axis=1).tolist(), "restart": restart.mean(axis=1).tolist()}}
     print(f"\n{len(order)} sequences from {len(set(docs))} documents. value = NLL_restart - NLL_full (nats/token)")
     for q_min in (S // 2, (3 * S) // 4, (7 * S) // 8):
         cols = np.concatenate([np.arange(j * S + q_min, (j + 1) * S) for j in range(1, T // S)])
