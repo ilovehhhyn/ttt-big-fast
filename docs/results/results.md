@@ -997,6 +997,56 @@ the context value and the un-tuned window damage measured on the same 96 sequenc
 sequence tracks what out-of-window context is worth there (memory) or how much the window
 damages the model there (repair).
 
+### SlimPajama at k = 1024: nothing trained, and the first 40-step pair
+
+First 96 validation sequences of the evaluation order (88 documents: 41 CommonCrawl sequences,
+29 Book, 19 arXiv, 7 GitHub), T = 32768, k = 1024 (`scripts/della/login_slimpajama_k1024.sh`).
+
+| run, nothing trained | inner lr | loss |
+|---|---|---|
+| arm A (no TTT) | - | 4.3094 |
+| arm B (normalized SGD) | 2e-6 | 3.9722 |
+| arm B | 4e-6 | 3.8821 |
+| arm B | 7e-6 | 3.8620 |
+| arm B | 2e-5 | 4.0237 |
+
+The inner-LR optimum sits where it did on PG-19 (4e-6 to 7e-6), so 4e-6 is kept. On the same 96
+sequences `context_value.py` (S = 1024, four pieces of 24; the new `--skip-sequences` slicing
+first reproduced sequences [12, 24) of the arXiv run to under 1e-4) gives the ceiling and the
+healthy full-attention loss per sequence, and `scripts/ttt_vs_context_value.py` sets them
+against what TTT alone gains. damage = arm A loss - (full + ceiling): how far the windowed
+model sits above a healthy model limited to the same window.
+
+| domain | sequences | documents | full attention | ceiling | damage (arm A) | TTT alone (A - B) | gain / damage |
+|---|---|---|---|---|---|---|---|
+| all | 96 | 88 | 1.9404 | +0.1519 | +2.2171 | +0.4274 | 0.19 |
+| arXiv | 19 | 17 | 1.0846 | +0.2500 | +1.5478 | +0.3168 | 0.20 |
+| Book | 29 | 28 | 2.4044 | +0.1092 | +2.6285 | +0.5238 | 0.20 |
+| CommonCrawl | 41 | 36 | 2.2185 | +0.1186 | +2.3723 | +0.4256 | 0.18 |
+| GitHub | 7 | 7 | 0.7121 | +0.2582 | +1.4206 | +0.3386 | 0.24 |
+
+By domain, the un-tuned gain follows the DAMAGE, not the ceiling: TTT recovers about a fifth of
+the damage everywhere, and gains most on books, where the ceiling is lowest. Across the 88
+documents, gain = b0 + b_ceiling x ceiling + b_damage x damage gives b_damage = +0.215
+[+0.184, +0.246] and b_ceiling = +0.438 [+0.273, +0.603] (R2 0.69; ceiling and damage correlate
+at -0.35, so they can be told apart). Read with care: the intercept is about -0.12 nats, so the
+line is a description, not a structural model, and a ceiling coefficient can be produced by
+anything that travels with the ceiling (easy, repetitive text; source domain). The script now
+prints two specifications that could undercut it (loss level added; domain indicators added);
+they had not been run on the real data when the SSH session lapsed.
+
+40 steps, same settings as the PG-19 pair (jobs 14239404 and 14239405; 40 and 21 minutes), each
+job's own evaluation on the first 32 sequences:
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop | 2.3600 | 2.4018 |
+| plain fine-tune (`--inner none`) | (pending) | 2.4086 |
+
+TTT is worth +0.0418 on the meta-learned weights here against +0.0309 on PG-19 at the same
+length (aggregate differences). The 96-sequence cells, the 2x2 and the per-document analysis
+run from `scripts/della/login_sp_cells.sh`.
+
 ### PG-19 at 128K, nothing trained
 
 Books of at least 131,073 tokens, so no sequence spans two books; every 25th book held out:
@@ -1024,10 +1074,16 @@ The 32K signature, stronger: nothing inside the window, then a gain that keeps g
 position, to +0.52 nats in the last band. With TTT the loss beyond the window FALLS along the
 sequence (4.14 to 3.84); without it, it stays between 4.21 and 4.52. Both arms are far above the
 2.54 seen inside the window, so this is the repair regime again, and at 32K at least 85% of
-such a gain was repair. What out-of-window context is worth at 128K is being scored in pieces
+such a gain was repair. What out-of-window context is worth at 128K is scored in pieces
 (`scripts/della/cv_128k.sbatch`): one full-attention float32 forward at 128K takes about
-6 minutes on an A100, and the first attempt, inside the evaluation job, had scored 5 of 12
+5 minutes on an A100, and the first attempt, inside the evaluation job, had scored 5 of 12
 sequences after 31 minutes and was cancelled with nothing saved (job 14238061).
+
+First piece (6 sequences, 6 books; job 14239478, 33 minutes), S = 8192, tightest band:
+full 2.6419, restart 2.6742, value +0.0323 per book, 95% CI [-0.0000, +0.0647], 6 of 6 positive;
+sanity difference exactly 0. At 128K the ceiling on PG-19 is about +0.03 against +0.0208 at 32K:
+four times the context adds little that a healthy model can use. Books are not where a
+long-range memory pays; the second piece (job 14239517) was running when this was written.
 
 ### The matched budget: corpus and jobs
 

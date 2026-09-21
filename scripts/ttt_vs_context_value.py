@@ -19,6 +19,14 @@ so b_ceiling is "nats gained per nat of available long-range information, at equ
 healthy_i = NLL_full + ceiling_i is approximate: NLL_full averages over all T tokens and the
 ceiling over the tight band of later segments; it is a covariate, not a headline number.
 
+A ceiling coefficient can be produced by things that merely travel with the ceiling, so two
+specifications that could undercut it are always printed next to the main one:
+
+    + loss level   adds NLL_full_d: is "ceiling" standing in for "easy, repetitive text"?
+    + domain       adds one indicator per source domain (at least MIN_DOMAIN_DOCS documents; the
+                   largest domain is the baseline): does the coefficient survive WITHIN domains,
+                   or is it a difference between arXiv/code and books/web?
+
     python scripts/ttt_vs_context_value.py --data DIR --context-value cv_skip0.json cv_skip24.json ... \\
         --untuned-a A.json --untuned-b B.json [--meta META.json --plain PLAIN.json]
 """
@@ -32,6 +40,9 @@ import numpy as np
 
 from ttt.data.dataset import TokenSequenceDataset, _shard_indices
 from ttt.eval.paired import cluster_means, clustered_paired_stats, ols_fit
+
+
+MIN_DOMAIN_DOCS = 5  # a source domain gets its own indicator only with at least this many documents
 
 
 def _per_seq(result: dict, block: str, n: int) -> np.ndarray:
@@ -121,13 +132,25 @@ def main() -> None:
     # ---- 2. across documents: which quantity does each gain follow?
     print("\nacross documents: gain = b0 + b_ceiling * ceiling + b_damage * damage   (95% CI)")
     c_doc = cluster_means(ceiling.tolist(), docs)
+    extra = {"+ loss level": {"full": cluster_means(full.tolist(), docs)}}
+    if doc_labels is not None:
+        doc_ids = sorted(set(docs))  # cluster_means returns clusters in sorted order
+        counts = {lab: sum(doc_labels[d] == lab for d in doc_ids) for lab in {doc_labels[d] for d in doc_ids}}
+        kept = sorted((lab for lab, c in counts.items() if c >= MIN_DOMAIN_DOCS), key=lambda lab: -counts[lab])
+        # Baseline = the largest domain together with every domain too small for its own indicator.
+        extra["+ domain"] = {f"is_{lab}": [float(doc_labels[d] == lab) for d in doc_ids] for lab in kept[1:]}
     for g, (gain, damage) in gains.items():
-        fit = ols_fit({"ceiling": c_doc, "damage": cluster_means(damage.tolist(), docs)}, cluster_means(gain.tolist(), docs))
-        report["regressions"][g] = fit
-        co = fit["coef"]
-        print(f"  {g:<44} b_ceiling {co['ceiling']['b']:+.3f} [{co['ceiling']['ci95'][0]:+.3f}, {co['ceiling']['ci95'][1]:+.3f}]   "
-              f"b_damage {co['damage']['b']:+.3f} [{co['damage']['ci95'][0]:+.3f}, {co['damage']['ci95'][1]:+.3f}]   "
-              f"R2 {fit['r2']:.2f}  (n={fit['n']})")
+        base = {"ceiling": c_doc, "damage": cluster_means(damage.tolist(), docs)}
+        y = cluster_means(gain.tolist(), docs)
+        report["regressions"][g] = {}
+        print(f"  {g}")
+        for spec, cols in {"ceiling + damage": {}, **extra}.items():
+            fit = ols_fit({**base, **cols}, y)
+            report["regressions"][g][spec] = fit
+            co = fit["coef"]
+            print(f"    {spec:<18} b_ceiling {co['ceiling']['b']:+.3f} [{co['ceiling']['ci95'][0]:+.3f}, {co['ceiling']['ci95'][1]:+.3f}]   "
+                  f"b_damage {co['damage']['b']:+.3f} [{co['damage']['ci95'][0]:+.3f}, {co['damage']['ci95'][1]:+.3f}]   "
+                  f"b_0 {co['intercept']['b']:+.3f}   R2 {fit['r2']:.2f}  (n={fit['n']})")
     r = float(np.corrcoef(c_doc, cluster_means((A - healthy).tolist(), docs))[0, 1])
     report["corr_ceiling_damage_untuned"] = r
     print(f"  correlation between ceiling and un-tuned damage across documents: {r:+.2f} "
