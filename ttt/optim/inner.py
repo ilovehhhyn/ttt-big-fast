@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 import torch
 from torch import Tensor
 
 from ttt.config import InnerConfig
+from ttt.optim.key_basis import load_key_basis, validate_key_basis
 
 __all__ = [
     "InnerOptimizer",
@@ -38,6 +40,7 @@ __all__ = [
     "NormalizedSGD",
     "DifferentiableAdamW",
     "MuonNoMomentum",
+    "PreconditionedSGD",
     "build_inner_optimizer",
     "newton_schulz5",
 ]
@@ -363,8 +366,71 @@ class ClippedSGD(InnerOptimizer):
         return new_fast, {}
 
 
+class PreconditionedSGD(InnerOptimizer):
+    """Normalized SGD on a gradient whose shared key directions are scaled down.
+
+        D = G - (1 - c) * (G E) E^T            G [out, in], E [in, r] orthonormal, c = cfg.shared_keep
+        W <- W - lr * m_t * sqrt(numel(W)) * D / (||D||_F + eps_norm)
+
+    G = sum_t d_t k_t^T, so (G E) E^T is the part of G whose keys k_t lie in the span of E: the
+    directions every token shares (ttt/optim/key_basis.py). That part moves the output for all
+    later tokens and caps the step size; the rest stores token-specific associations. c = 1 gives
+    D = G, which is NormalizedSGD with norm_scope="tensor" exactly; c = 0 removes the shared part.
+    `lr` stays the per-element RMS of the update. Cost: two [out, in] x [in, r] products per matrix.
+    State is empty.
+    """
+
+    def __init__(self, cfg: InnerConfig, key_basis: dict[str, Tensor]) -> None:
+        super().__init__(cfg)
+        assert cfg.norm_scope == "tensor", "preconditioned_sgd normalizes each tensor; norm_scope must be 'tensor'"
+        self.key_basis = dict(validate_key_basis(key_basis))
+
+    def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
+        return {}
+
+    def step(
+        self,
+        fast: dict[str, Tensor],
+        grads: dict[str, Tensor],
+        state: dict[str, Any],
+        *,
+        lr_scale: Tensor | float = 1.0,
+        lr_mult: dict[str, Tensor] | None = None,
+    ) -> tuple[dict[str, Tensor], dict[str, Any]]:
+        _check_keys(fast, grads, lr_mult)
+        assert set(self.key_basis) == set(fast), (
+            f"key basis and fast weights must name the same matrices; basis only: "
+            f"{sorted(set(self.key_basis) - set(fast))}, fast only: {sorted(set(fast) - set(self.key_basis))}; "
+            "rerun scripts/key_basis.py with this model's --fast-blocks"
+        )
+        cfg = self.cfg
+        new_fast: dict[str, Tensor] = {}
+        for k in sorted(fast):
+            g, w = grads[k], fast[k]
+            e = self._basis_like(k, g)
+            d = g - (1.0 - cfg.shared_keep) * ((g @ e) @ e.mT)
+            n = math.sqrt(float(w.numel()))
+            new_fast[k] = w - _lr(cfg, k, lr_scale, lr_mult) * n * _normalized_direction(d, d.reshape(-1).norm(), cfg.eps_norm)
+        return new_fast, {}
+
+    def _basis_like(self, key: str, g: Tensor) -> Tensor:
+        """The basis of `key` on g's device and dtype, moved once and kept."""
+        e = self.key_basis[key]
+        assert g.ndim == 2 and e.shape[0] == g.shape[1], (
+            f"key basis for {key!r} has {e.shape[0]} input features but the gradient is {tuple(g.shape)} "
+            "[out, in]; rerun scripts/key_basis.py for this model"
+        )
+        if e.device != g.device or e.dtype != g.dtype:
+            e = e.to(device=g.device, dtype=g.dtype)
+            self.key_basis[key] = e
+        return e
+
+
 def build_inner_optimizer(cfg: InnerConfig) -> InnerOptimizer:
     """'none' -> a NoOpInnerOptimizer whose step returns fast unchanged."""
+    if cfg.optimizer == "preconditioned_sgd":
+        assert cfg.key_basis_path is not None  # InnerConfig guarantees it
+        return PreconditionedSGD(cfg, load_key_basis(Path(cfg.key_basis_path)))
     table: dict[str, type[InnerOptimizer]] = {
         "none": NoOpInnerOptimizer,
         "normalized_sgd": NormalizedSGD,

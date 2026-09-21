@@ -125,9 +125,12 @@ class InnerConfig:
     adamw:           differentiated-through AdamW, moments warm-started from the
                      first chunk gradient; denominator sqrt(v_hat + eps^2).
     muon:            W <- W - lr_rms * sqrt(max(m,n)) * NewtonSchulz5(g)
+    preconditioned_sgd:  normalized_sgd applied to D = g - (1 - shared_keep) * (g E) E^T, where the
+                     columns of E [in, r] are the input ("key") directions that all tokens share
+                     (scripts/key_basis.py). shared_keep = 1 is normalized_sgd exactly.
     """
 
-    optimizer: Literal["none", "normalized_sgd", "adamw", "muon", "clipped_sgd"] = "normalized_sgd"
+    optimizer: Literal["none", "normalized_sgd", "adamw", "muon", "clipped_sgd", "preconditioned_sgd"] = "normalized_sgd"
     lr_rms: float = 1e-3
     norm_scope: Literal["tensor", "global"] = "tensor"
     eps_norm: float = 1e-6  # normalized_sgd denominator floor
@@ -145,8 +148,21 @@ class InnerConfig:
     # still near zero. Kept configurable so the deviation is visible and testable.
     ilr_init: float = 0.1
     clip_tau: float = 1.0  # clipped_sgd only: global-norm clip threshold (e2e uses 1.0)
+    # preconditioned_sgd only. A chunk gradient is G = sum_t d_t k_t^T (d_t: error at the matrix
+    # output, k_t: its input, the "key"). Most of ||G||^2 lies in a few key directions shared by
+    # all tokens; that part moves the output for every later token and caps the step size, while
+    # the token-specific part is what stores "this context -> this next token".
+    key_basis_path: str | None = None  # file written by scripts/key_basis.py
+    shared_keep: float = 0.0  # fraction of the shared-direction component kept in the update
 
     def __post_init__(self) -> None:
+        needs_basis = self.optimizer == "preconditioned_sgd"
+        assert needs_basis == (self.key_basis_path is not None), (
+            f"optimizer={self.optimizer!r} with key_basis_path={self.key_basis_path!r}: preconditioned_sgd "
+            "requires a key basis and no other optimizer uses one; write it with scripts/key_basis.py and "
+            "pass --key-basis, or drop the option"
+        )
+        assert 0.0 <= self.shared_keep <= 1.0, f"shared_keep must be in [0, 1], got {self.shared_keep}"
         assert self.lr_rms >= 0.0
         assert 0.0 <= self.delta_decay < 1.0
         assert self.eps > 0.0 and self.eps_norm > 0.0

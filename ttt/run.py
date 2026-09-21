@@ -122,11 +122,16 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     model = model.to(device)
 
     optimizer = arm["inner"] if args.inner is None else args.inner
+    assert args.shared_keep is None or optimizer == "preconditioned_sgd", (
+        f"--shared-keep {args.shared_keep} has no effect with --inner {optimizer}; it belongs to "
+        "--inner preconditioned_sgd"
+    )
     inner = InnerConfig(optimizer=optimizer,
                         lr_rms=resolve_inner_lr(optimizer, args.inner_lr), norm_scope=args.norm_scope,
                         eps=args.adam_eps, clip_tau=args.clip_tau, beta1=0.9, beta2=0.9, warm_start=True,
                         learned_lr=bool(arm["slow"]) and "inner_lr_log" in arm["slow"],
-                        delta_decay=args.delta_decay)
+                        delta_decay=args.delta_decay, key_basis_path=args.key_basis,
+                        shared_keep=0.0 if args.shared_keep is None else args.shared_keep)
     outer = OuterConfig(lr=args.outer_lr, total_steps=args.steps)
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
@@ -203,7 +208,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tokens-per-step", type=int, default=524288)
     p.add_argument("--steps", type=int, default=250)
     p.add_argument("--inner", default=None,
-                   choices=[None, "none", "normalized_sgd", "adamw", "muon", "clipped_sgd"])
+                   choices=[None, "none", "normalized_sgd", "adamw", "muon", "clipped_sgd", "preconditioned_sgd"])
+    p.add_argument("--key-basis", default=None,
+                   help="preconditioned_sgd: the shared key directions of each fast matrix (scripts/key_basis.py)")
+    p.add_argument("--shared-keep", type=float, default=None,
+                   help="preconditioned_sgd: fraction in [0, 1] of the shared-direction part of the gradient "
+                        "kept in the update (default 0 removes it; 1 is normalized_sgd exactly)")
     p.add_argument("--inner-lr", type=float, default=None,
                    help="per-element RMS of the inner step. REQUIRED whenever an inner optimizer is "
                         "active: there is no safe default. The unit is 1/sqrt(n_fast) (7.05e-5 for the "
