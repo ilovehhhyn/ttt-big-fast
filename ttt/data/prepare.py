@@ -85,6 +85,10 @@ class PrepareSpec:
     text_field: str = "text"
     tokenizer_id: str = "meta-llama/Llama-3.2-1B"
     val_every: int = 200  # every val_every-th KEPT document goes to val instead of train
+    # Dotted path to a per-document label in the source row, e.g. "meta.redpajama_set_name"
+    # for SlimPajama's source domain. When set, the label of every KEPT document is written,
+    # in document order, to <split>_docs.json, so results can be broken down by domain.
+    label_field: str | None = None
 
     def __post_init__(self) -> None:
         assert self.min_doc_tokens >= 1
@@ -206,13 +210,43 @@ def filter_and_split(
     Pure and network-free: this is the half of :func:`prepare` the tests drive
     with synthetic token ids.
     """
+    labelled = ((None, tokens) for tokens in docs)
+    for split_name, _, tokens in filter_and_split_labeled(labelled, min_doc_tokens=min_doc_tokens, val_every=val_every):
+        yield split_name, tokens
+
+
+def filter_and_split_labeled(
+    docs: Iterable[tuple[object, list[int]]],
+    *,
+    min_doc_tokens: int,
+    val_every: int,
+) -> Iterator[tuple[str, object, list[int]]]:
+    """:func:`filter_and_split` for ``(label, token_ids)`` pairs; yields ``(split, label, token_ids)``.
+
+    The single implementation of the keep / assign rule. A label (e.g. the source domain
+    of a SlimPajama document) rides along untouched, so that carrying labels can never
+    change which documents are kept or where they go.
+    """
     assert min_doc_tokens >= 1 and val_every >= 1
     kept = 0
-    for tokens in docs:
+    for label, tokens in docs:
         if len(tokens) < min_doc_tokens:  # >= threshold is kept, see module docstring
             continue
-        yield ("val" if kept % val_every == 0 else "train"), tokens
+        yield ("val" if kept % val_every == 0 else "train"), label, tokens
         kept += 1
+
+
+def may_reach_token_count(text: str, min_doc_tokens: int) -> bool:
+    """False iff `text` CANNOT tokenise to `min_doc_tokens` tokens, decided without tokenising.
+
+    Every token covers at least one UTF-8 byte, so  tokens <= bytes  and a text with fewer
+    bytes than `min_doc_tokens` can be dropped exactly (no false negatives). Bytes, not
+    characters: a rare character can become several byte-level tokens. On web-scale corpora
+    this skips the tokeniser for the great majority of documents when hunting for long ones.
+    """
+    if 4 * len(text) < min_doc_tokens:          # UTF-8 uses at most 4 bytes per character
+        return False
+    return len(text.encode("utf-8", "surrogatepass")) >= min_doc_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +257,7 @@ class _Stats:
     seen: int = 0
     kept: int = 0
     skipped: int = 0  # documents that failed to tokenise
+    too_short: int = 0  # dropped by the exact byte-length prefilter, never tokenised
 
 
 def tokenize_stream(
@@ -232,7 +267,20 @@ def tokenize_stream(
     *,
     batch_size: int = _TOKENIZE_BATCH,
 ) -> Iterator[list[int]]:
-    """Tokenise `texts` in batches (HF fast tokenizers take a list of strings).
+    """Tokenise `texts` in batches; see :func:`tokenize_labeled_stream`, which it wraps."""
+    labelled = ((None, text) for text in texts)
+    for _, tokens in tokenize_labeled_stream(labelled, encode_batch, stats, batch_size=batch_size):
+        yield tokens
+
+
+def tokenize_labeled_stream(
+    items: Iterable[tuple[object, str]],
+    encode_batch: Callable[[list[str]], list[list[int]]],
+    stats: _Stats,
+    *,
+    batch_size: int = _TOKENIZE_BATCH,
+) -> Iterator[tuple[object, list[int]]]:
+    """Tokenise ``(label, text)`` pairs in batches (HF fast tokenizers take a list of strings).
 
     THE ONE DELIBERATE try/except IN THIS MODULE.  A single malformed row
     (broken unicode, a surrogate pair the tokenizer rejects) must not kill a
@@ -240,36 +288,50 @@ def tokenize_stream(
     time and the individual offenders are skipped and counted
     (``stats.skipped``, reported at the end of :func:`prepare`).  Nothing else
     in this module has a fallback path.
-    """
-    batch: list[str] = []
 
-    def flush() -> Iterator[list[int]]:
+    Labels travel WITH their text through both paths, so a skipped document takes its
+    label with it and every later label stays next to its own tokens.
+    """
+    batch: list[tuple[object, str]] = []
+
+    def flush() -> Iterator[tuple[object, list[int]]]:
         if not batch:
             return
         try:
-            yield from encode_batch(batch)
+            encoded = encode_batch([text for _, text in batch])
+            assert len(encoded) == len(batch), f"tokenizer returned {len(encoded)} rows for {len(batch)} texts"
+            yield from zip((label for label, _ in batch), encoded, strict=True)
         except Exception:  # noqa: BLE001 - see docstring
-            for text in batch:
+            for label, text in batch:
                 try:
-                    yield encode_batch([text])[0]
+                    yield label, encode_batch([text])[0]
                 except Exception:  # noqa: BLE001
                     stats.skipped += 1
         batch.clear()
 
-    for text in texts:
-        batch.append(text)
+    for item in items:
+        batch.append(item)
         if len(batch) >= batch_size:
             yield from flush()
     yield from flush()
 
 
-def _hf_texts(spec: PrepareSpec) -> Iterator[str]:
-    """Stream the raw text column. Streaming is mandatory: DCLM is ~100B+ tokens."""
+def _label_of(row: dict, dotted: str) -> object:
+    """row["a"]["b"] for dotted path "a.b"."""
+    value = row
+    for key in dotted.split("."):
+        value = value[key]
+    return value
+
+
+def _hf_items(spec: PrepareSpec) -> Iterator[tuple[object, str]]:
+    """Stream ``(label, text)`` from the HF dataset. Streaming is mandatory: DCLM is ~100B+ tokens."""
     from datasets import load_dataset
 
     ds = load_dataset(spec.dataset, split=spec.split, streaming=True)
     for row in ds:
-        yield row[spec.text_field]
+        label = None if spec.label_field is None else _label_of(row, spec.label_field)
+        yield label, row[spec.text_field]
 
 
 def prepare(spec: PrepareSpec, *, progress: bool = True) -> dict:
@@ -331,21 +393,34 @@ def prepare(spec: PrepareSpec, *, progress: bool = True) -> dict:
             flush=True,
         )
 
-    def counted(texts: Iterable[str]) -> Iterator[str]:
-        for text in texts:
+    def counted(items: Iterable[tuple[object, str]]) -> Iterator[tuple[object, str]]:
+        for label, text in items:
             stats.seen += 1
             log()
-            yield text
+            # Exact and cheap: a text with fewer bytes than min_doc_tokens cannot qualify,
+            # so it never reaches the tokenizer (most web documents stop here).
+            if not may_reach_token_count(text, spec.min_doc_tokens):
+                stats.too_short += 1
+                continue
+            yield label, text
 
-    token_stream = tokenize_stream(counted(_hf_texts(spec)), encode_batch, stats)
-    for split_name, tokens in filter_and_split(
+    labels: dict[str, list] = {"train": [], "val": []}
+    token_stream = tokenize_labeled_stream(counted(_hf_items(spec)), encode_batch, stats)
+    for split_name, label, tokens in filter_and_split_labeled(
         token_stream, min_doc_tokens=spec.min_doc_tokens, val_every=spec.val_every
     ):
         stats.kept += 1
         writers[split_name].add(tokens)
+        labels[split_name].append(label)
         if writers[spec.out_split].num_tokens >= spec.target_tokens:
             break
     log(force=True)
+    if spec.label_field is not None:
+        for name, values in labels.items():
+            assert len(values) == writers[name].num_docs, (
+                f"{len(values)} labels for {writers[name].num_docs} {name} documents"
+            )
+            (out_dir / f"{name}_docs.json").write_text(json.dumps({"label_field": spec.label_field, "labels": values}))
 
     meta = {
         name: writer.finalize({**base_meta, "split": name}) for name, writer in writers.items()
@@ -354,6 +429,7 @@ def prepare(spec: PrepareSpec, *, progress: bool = True) -> dict:
         docs_seen=stats.seen,
         docs_kept=stats.kept,
         docs_skipped=stats.skipped,
+        docs_too_short_untokenised=stats.too_short,
         keep_rate=stats.kept / max(stats.seen, 1),
         target_tokens=spec.target_tokens,
         out_split=spec.out_split,
@@ -396,6 +472,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="HF tokenizer repo id (use unsloth/Llama-3.2-1B if the gated meta-llama repo 403s)")
     p.add_argument("--val-every", default=defaults["val_every"], type=int,
                    help="every N-th kept document goes to val")
+    p.add_argument("--label-field", default=None,
+                   help='dotted path to a per-document label, e.g. "meta.redpajama_set_name" (SlimPajama); '
+                        "kept documents' labels are written to <split>_docs.json")
     p.add_argument("--no-progress", action="store_true", help="silence the progress log")
     return p
 
@@ -412,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         text_field=args.text_field,
         tokenizer_id=args.tokenizer_id,
         val_every=args.val_every,
+        label_field=args.label_field,
     )
     meta = prepare(spec, progress=not args.no_progress)
     print(json.dumps({k: v for k, v in meta.items()}, indent=2, default=str))

@@ -289,3 +289,93 @@ def test_start_sequence_requires_micro_batch_one(tmp_path) -> None:
     _write_stream(tmp_path, "train", num_tokens=33)
     with pytest.raises(AssertionError, match="micro_batch == 1"):
         build_dataloader(tmp_path, "train", 4, 3, shuffle=True, seed=0, num_workers=0, start_sequence=2)
+
+
+# ---------------------------------------------------------------------------
+# labelled documents and the exact byte-length prefilter (SlimPajama)
+# ---------------------------------------------------------------------------
+def test_byte_prefilter_is_exact_never_dropping_a_document_that_could_qualify() -> None:
+    """A token covers at least one UTF-8 byte, so a text with fewer bytes than
+    min_doc_tokens cannot reach min_doc_tokens tokens. The filter must use BYTES, not
+    characters: one rare character can become several byte-level tokens."""
+    from ttt.data.prepare import may_reach_token_count
+
+    assert not may_reach_token_count("a" * 9, 10)          # 9 bytes < 10 tokens: impossible
+    assert may_reach_token_count("a" * 10, 10)             # 10 bytes: possible
+    # 3 characters but 12 bytes: up to 12 byte-level tokens, so it may qualify for 10.
+    assert may_reach_token_count("\U0001F600" * 3, 10)
+    assert not may_reach_token_count("\U0001F600" * 2, 10)  # 8 bytes
+
+
+def test_labels_stay_aligned_with_documents_even_when_one_fails_to_tokenise() -> None:
+    """The label of document k must end up next to document k's tokens. A document that
+    fails to tokenise is dropped WITH its label, not leaving later labels shifted by one."""
+    from ttt.data.prepare import _Stats, tokenize_labeled_stream
+
+    def encode_batch(texts: list[str]) -> list[list[int]]:
+        if any(t == "BAD" for t in texts):
+            raise ValueError("tokenizer rejected a text")
+        return [[len(t)] * len(t) for t in texts]
+
+    items = [("books", "aa"), ("arxiv", "BAD"), ("github", "cccc"), ("books", "b")]
+    stats = _Stats()
+    out = list(tokenize_labeled_stream(iter(items), encode_batch, stats, batch_size=3))
+    assert out == [("books", [2, 2]), ("github", [4, 4, 4, 4]), ("books", [1])]
+    assert stats.skipped == 1
+
+
+def test_filter_and_split_labeled_matches_the_unlabelled_assignment() -> None:
+    """Carrying labels must not change WHICH documents go to val."""
+    from ttt.data.prepare import filter_and_split_labeled
+
+    docs = [[1] * n for n in (5, 1, 7, 9, 2, 6, 8)]
+    labelled = [(f"d{i}", d) for i, d in enumerate(docs)]
+    plain = list(filter_and_split(iter(docs), min_doc_tokens=5, val_every=2))
+    with_labels = list(filter_and_split_labeled(iter(labelled), min_doc_tokens=5, val_every=2))
+    assert [(s, t) for s, _, t in with_labels] == plain
+    assert [l for _, l, _ in with_labels] == ["d0", "d2", "d3", "d5", "d6"]
+
+
+def test_prepare_writes_labels_aligned_with_the_documents_on_disk(tmp_path, monkeypatch) -> None:
+    """End to end through prepare(): the k-th BOS-delimited document of <split>.bin must be
+    the document whose label is labels[k] in <split>_docs.json, with short documents dropped
+    before tokenisation and the val/train rule unchanged."""
+    import transformers
+
+    from ttt.data import prepare as prep
+
+    class FakeTokenizer:
+        bos_token_id, eos_token_id = 1, 2
+
+        def __call__(self, texts, add_special_tokens=False):
+            # one token per character, id = 10 + the digit the text is made of
+            return {"input_ids": [[10 + int(t[0])] * len(t) for t in texts]}
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", lambda *_a, **_k: FakeTokenizer())
+    # (label, text): text is a repeated digit so each document's tokens identify it.
+    rows = [("books", "0" * 6), ("web", "1" * 2), ("arxiv", "2" * 8), ("github", "3" * 5),
+            ("web", "4" * 3), ("books", "5" * 7)]
+    monkeypatch.setattr(prep, "_hf_items", lambda spec: iter(rows))
+
+    spec = prep.PrepareSpec(dataset="fake/ds", split="train", out_dir=tmp_path, out_split="train",
+                            min_doc_tokens=5, target_tokens=10**9, val_every=2,
+                            label_field="meta.set_name")
+    meta = prep.prepare(spec, progress=False)
+
+    assert meta["docs_seen"] == 6 and meta["docs_kept"] == 4
+    assert meta["docs_too_short_untokenised"] == 2          # "11" and "444" never reached the tokenizer
+    # kept order: books(0) arxiv(2) github(3) books(5); kept index 0 and 2 go to val.
+    want = {"val": [("books", 10), ("github", 13)], "train": [("arxiv", 12), ("books", 15)]}
+    for split, expected in want.items():
+        labels = json.loads((tmp_path / f"{split}_docs.json").read_text())
+        assert labels["label_field"] == "meta.set_name"
+        toks = np.fromfile(tmp_path / f"{split}.bin", dtype=np.uint32).tolist()
+        docs, cur = [], None
+        for t in toks:                                       # split the stream at BOS
+            if t == 1:
+                cur = []; docs.append(cur)
+            else:
+                cur.append(t)
+        assert len(docs) == len(labels["labels"]) == len(expected)
+        for doc, label, (want_label, want_token) in zip(docs, labels["labels"], expected, strict=True):
+            assert label == want_label and set(doc) == {want_token}, (split, label, doc[:3])

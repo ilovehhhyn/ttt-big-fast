@@ -109,6 +109,29 @@ def main() -> None:
         print(f"  recent context >= {q_min:>5}: full {full[:, cols].mean():.4f}  restart {restart[:, cols].mean():.4f}  "
               f"value {per_doc['mean']:+.4f}  per-document 95% CI [{per_doc['ci95'][0]:+.4f}, {per_doc['ci95'][1]:+.4f}] "
               f"(n={per_doc['n']}, positive {per_doc['positive']}/{per_doc['n']})")
+    # Per-domain breakdown, when the corpus was prepared with --label-field (SlimPajama):
+    # which KIND of text has long-range context worth remembering? Tightest band only.
+    labels_path = Path(a.data) / "val_docs.json"
+    if labels_path.exists():
+        doc_labels = json.loads(labels_path.read_text())["labels"]
+        seq_labels = [doc_labels[d] for d in docs]
+        q_min = (7 * S) // 8
+        cols = np.concatenate([np.arange(j * S + q_min, (j + 1) * S) for j in range(1, T // S)])
+        d_all = restart[:, cols].mean(axis=1) - full[:, cols].mean(axis=1)
+        report["by_label"] = {}
+        print(f"  by label (recent context >= {q_min}):")
+        for lab in sorted(set(seq_labels)):
+            idx = [i for i, l in enumerate(seq_labels) if l == lab]
+            n_docs = len({docs[i] for i in idx})
+            entry = {"sequences": len(idx), "documents": n_docs, "full": float(full[idx][:, cols].mean()),
+                     "restart": float(restart[idx][:, cols].mean()), "value": float(d_all[idx].mean())}
+            if n_docs >= 2:   # an interval needs at least two documents
+                entry["per_document"] = clustered_paired_stats(d_all[idx].tolist(), [docs[i] for i in idx])
+            report["by_label"][lab] = entry
+            ci = entry.get("per_document", {}).get("ci95")
+            print(f"    {lab:<24} {len(idx):>3} seqs / {n_docs:>3} docs  full {entry['full']:.4f}  value {entry['value']:+.4f}"
+                  + (f"  95% CI [{ci[0]:+.4f}, {ci[1]:+.4f}]" if ci else "  (one document: no interval)"))
+
     # Sanity: in segment 0 the two conditions see IDENTICAL input, so they must agree up to
     # kernel noise. A large value here means the two code paths differ in more than context.
     seg0 = float(np.abs(restart[:, :S].mean(axis=1) - full[:, :S].mean(axis=1)).max())
