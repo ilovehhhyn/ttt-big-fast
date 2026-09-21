@@ -21,13 +21,22 @@ C32K="--arm C --mode train --data $DATA/pg19_32k --seq-len 32768 --chunk 1024 --
 
 say "code: $(git log --oneline -1)"
 NEED=760217600   # 725 steps x 32 sequences x 32768 tokens
-HAVE=$(.venv/bin/python -c "import json;print(json.load(open('$DATA/pg19_32k/train.json'))['num_tokens'])")
-say "PG-19 32K train tokens: $HAVE; the matched budget consumes $NEED"
+# The matched run reads the EXTENDED corpus (scripts/della/extend_pg19.sh): same validation
+# split byte for byte, larger training split. Until it is READY, the gate below refuses.
+MATCH_DATA="$DATA/pg19_32k_full"
+if [ -e "$MATCH_DATA/READY" ]; then
+  HAVE=$(.venv/bin/python -c "import json;print(json.load(open('$MATCH_DATA/train.json'))['num_tokens'])")
+else
+  HAVE=0
+fi
+say "matched-budget corpus $MATCH_DATA: $HAVE train tokens ready; the run consumes $NEED"
 
 # ---- 0. Launch the login-node work that needs no gate (both scripts skip what is done).
-( nohup scripts/della/round2_data.sh  > "$LOGS/round2_data.log"  2>&1 < /dev/null & )
-( nohup scripts/della/round2_login.sh > "$LOGS/round2_login.log" 2>&1 < /dev/null & )
-say "launched round2_data.sh and round2_login.sh"
+# Never two instances at once: both would start the same unfinished item.
+for job in round2_data round2_login; do
+  if pgrep -u hh9077 -f "$job.sh" > /dev/null; then say "$job.sh is already running"
+  else ( nohup "scripts/della/$job.sh" >> "$LOGS/$job.log" 2>&1 < /dev/null & ); say "launched $job.sh"; fi
+done
 
 # ---- 1. What does Slurm say about the job shapes? (informational)
 for shape in "--time=60:00:00 --ntasks-per-node=4 --gres=gpu:4" "--time=34:00:00 --ntasks-per-node=4 --gres=gpu:4" \
@@ -66,19 +75,19 @@ say "GATE PASSED: 2 GPUs reproduce the single-GPU run within 1e-3 nats"
 # The loader cycles when the corpus runs out, which would turn one pass over fresh text (what
 # the reference does) into several epochs over a smaller set. Refuse rather than drift.
 if [ "$HAVE" -lt "$NEED" ]; then
-  say "GATE FAILED: pg19_32k/train has $HAVE tokens, fewer than the $NEED the matched budget consumes."
-  say "Prepare more PG-19 (raise --target-tokens) and rerun this script; finished steps are skipped."
+  say "GATE FAILED: $MATCH_DATA has $HAVE train tokens ready, fewer than the $NEED the matched budget"
+  say "consumes. scripts/della/extend_pg19.sh prepares it and then reruns this script."
   exit 1
 fi
 export SBATCH_SCRIPT=scripts/della/run_arm_ddp.sbatch SBATCH_EXTRA="--ntasks-per-node=4 --gres=gpu:4"
 if ! squeue -u hh9077 -h -o %j | grep -q '^C32k_match_1$'; then
   # 8 sequences per GPU per step at 33 s each = 264 s per step; 725 steps = 53 h, plus evaluation.
-  scripts/della/submit_chain.sh C32k_match 2 60 $C32K --inner normalized_sgd --inner-lr 4e-6 \
+  scripts/della/submit_chain.sh C32k_match 2 60 $C32K --data "$MATCH_DATA" --inner normalized_sgd --inner-lr 4e-6 \
       --steps 725 --tokens-per-step 1048576 --eval-ttt-off
 fi
 if ! squeue -u hh9077 -h -o %j | grep -q '^C32k_match_ctl_1$'; then
   # --inner none is equivalent to --inner-lr 0 and 1.9x faster: 17.2 s per sequence -> 28 h.
-  scripts/della/submit_chain.sh C32k_match_ctl 2 34 $C32K --inner none \
+  scripts/della/submit_chain.sh C32k_match_ctl 2 34 $C32K --data "$MATCH_DATA" --inner none \
       --steps 725 --tokens-per-step 1048576
 fi
 say "queue now:"; squeue -u hh9077 -o '%.10i %.18j %.2t %.8f %.11l %.6D %R' | grep -E 'JOBID|C32k|D32k'
