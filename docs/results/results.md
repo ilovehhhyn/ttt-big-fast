@@ -1149,6 +1149,72 @@ Same test, same 32 sequences (`scripts/della/recall_lr.sbatch`, jobs 14244517 an
    trained at 4e-6, so a larger step at test time is a setting they never saw. Training at the
    larger step is the obvious next run.
 
+### More recall runs: window 8192, SlimPajama, number of fast blocks, training at a larger rate
+
+Same test (`scripts/della/login_recall_more.sh`, `login_recall_ilr.sh`). Recall without TTT is
+exactly 0 wherever the gap exceeds attention's reach, and within +-0.001 at window 8192.
+
+| model | recall with TTT | 95% CI | documents positive |
+|---|---|---|---|
+| PG-19, window 8192, un-tuned (16 pairs) | +0.0283 | [+0.0247, +0.0318] | 14/14 |
+| PG-19, window 8192, 10 steps trained with TTT | +0.0772 | [+0.0715, +0.0829] | 14/14 |
+| PG-19, window 8192, 10 steps plain fine-tune | +0.0755 | [+0.0690, +0.0819] | 14/14 |
+| SlimPajama, window 1024, un-tuned | +0.1076 | [+0.0919, +0.1233] | 30/30 |
+| SlimPajama, 40 steps trained with TTT | +0.0971 | [+0.0907, +0.1034] | 30/30 |
+| SlimPajama, 40 steps plain fine-tune | +0.0922 | [+0.0858, +0.0986] | 30/30 |
+| SlimPajama, full attention, no TTT | +2.2611 | [+1.9826, +2.5396] | 30/30 |
+| PG-19, window 1024, un-tuned, 2 fast blocks | +0.0413 | [+0.0362, +0.0464] | 20/20 |
+| PG-19, window 1024, un-tuned, 4 fast blocks | +0.0717 | [+0.0651, +0.0783] | 20/20 |
+| PG-19, window 1024, un-tuned, 8 fast blocks | +0.1021 | [+0.0925, +0.1118] | 20/20 |
+| PG-19, window 1024, 40 steps TRAINED at inner LR 1e-5, scored at 1e-5 | +0.2931 | [+0.2770, +0.3091] | 20/20 |
+
+1. More fast blocks store more: +0.04, +0.07, +0.10 for 2, 4 and 8 blocks at the same step per weight.
+2. Training at the larger inner rate keeps the recall and removes its cost. The weights trained at
+   1e-5 score 2.6820 on ordinary text (2.7337 with TTT off); the weights trained at 4e-6 score
+   2.6777, and 2.7088 when only the test-time rate is raised to 1e-5. Recall is +0.2931 against
+   +0.1054: 2.8 times more at +0.004 in loss.
+3. Recall is flat along the passage (+0.0707, +0.0722, +0.0788, +0.0731 by quarter, un-tuned).
+   A mismatch between the two copies' inputs would give a rising curve, so the limit is the
+   size of the write, not the read.
+
+### Why the write is weak (five agents, 2026-09-21), and the change that follows
+
+Five sub-agents studied the problem from different angles. Four ran small experiments on a 135M
+model or a toy built from this repo's classes; NONE of their numbers is measured on Llama. Three
+of them reached the same explanation independently:
+
+- A chunk's update to a fast matrix is G = sum_t d_t k_t^T, where k_t is the matrix input at
+  token t (the key) and d_t the error at its output (the value). Reading with input q gives
+  sum_t d_t (k_t . q): attention over past tokens without the softmax, in a fixed size.
+- To first order, recall = step norm x gradient norm x (cosine with the passage's gradient -
+  cosine with unrelated text). Their replica gives 0.9 to 1.25 nats per unit of step norm; ours
+  is 0.0717 / 0.057 = 1.26. So one step of our size can store only about what we measure, and
+  later updates erase little (ours: +0.0883 four chunks apart, +0.0717 seventeen apart).
+- The step cannot simply grow. About 78% of ||G||^2 lies in a few key directions that all tokens
+  share. That part acts like a bias on every later token and breaks the model as the step grows;
+  the token-specific part, which stores "this context -> this next token", gets what is left.
+- Removing or equalizing the shared directions let their small models take a 10 to 30 times
+  larger step: recall rose from 3-5% to 16-27% of full attention at unchanged loss.
+- Under truncated backpropagation the outer loop cannot learn to write for later reads: a read in
+  a later truncation window gives the write no credit, and the learned step sizes get a gradient
+  of the wrong sign (cosine -0.90 with the exact gradient in their toy). With AdamW at 4e-4 for
+  40 steps the step-size multipliers could not leave [0.992, 1.008] in any case.
+
+The TTT-E2E paper reports the same weakness (checked in its Table 2): on needle-in-a-haystack at
+32K it scores 0.24, a sliding window alone 0.26, full attention 1.00, and the authors write that
+their method "leaves out seemingly irrelevant details, such as the target string".
+
+The change, inside the fast/slow framework (`--inner preconditioned_sgd`, `scripts/key_basis.py`):
+normalize D = G - (1 - c) (G E) E^T instead of G, where the columns of E are the strongest
+eigenvectors of E[k k^T] on training text. c = 1 is normalized SGD exactly. The planned second
+stage makes this low-rank matrix a slow weight, so the outer loop learns how to write.
+
+First Llama measurement of the related Muon update (all singular values of G set to 1): at the
+SAME nominal rate it is worse than normalized SGD on the un-tuned model (first 16 pairs and
+sequences: Muon 2e-5 recall +0.1263, loss 4.8869; normalized SGD 1e-5 recall +0.1393, loss 4.7142;
+no TTT 5.1782). The agents predicted it needs a 10 to 30 times larger rate; those runs are in
+`scripts/della/recall_muon.sbatch`.
+
 ### PG-19 at 128K, nothing trained
 
 Books of at least 131,073 tokens, so no sequence spans two books; every 25th book held out:
