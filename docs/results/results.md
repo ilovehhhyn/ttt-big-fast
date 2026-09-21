@@ -1118,6 +1118,37 @@ Prediction written before the runs: +0.01 to +0.05. Observed: +0.07 to +0.11.
    unstable (5e-5). The step size that is best for the loss is not the best for memory.
 5. Stacked attention windows pass nothing: 4096 tokens apart, recall without TTT is -0.0007.
 
+### Recall against the inner learning rate
+
+Same test, same 32 sequences (`scripts/della/recall_lr.sbatch`, jobs 14244517 and 14244518).
+"Loss" is the ordinary loss on the 32 standard validation sequences.
+
+| un-tuned model, inner LR | recall | 95% CI | loss |
+|---|---|---|---|
+| 4e-6 | +0.0717 | [+0.0651, +0.0783] | 4.5232 |
+| 7e-6 | +0.1139 | [+0.1032, +0.1247] | 4.5199 |
+| 1e-5 | +0.1438 | [+0.1299, +0.1577] | 4.5493 |
+| 1.4e-5 | +0.1563 | [+0.1263, +0.1862] | 4.6035 |
+| 2e-5 | +0.1348 | [+0.0865, +0.1830] | 4.7039 |
+| 3e-5 | +0.1240 | [+0.0600, +0.1880] | 4.9499 |
+| 5e-5 | +0.1348 | [-0.7429, +1.0125] | 6.9575 |
+
+| 40-step weights trained with TTT at 4e-6, evaluated at | recall | 95% CI | loss |
+|---|---|---|---|
+| 4e-6 | +0.1054 | [+0.1010, +0.1097] | 2.6777 |
+| 1e-5 | +0.2652 | [+0.2418, +0.2885] | 2.7088 |
+| 2e-5 | +0.3880 | [+0.3105, +0.4655] | 2.8318 |
+| 4e-5 | +0.4181 | [+0.2898, +0.5465] | 3.1689 |
+
+1. On the un-tuned model recall peaks near 1.4e-5, at about twice its value at 4e-6. Going from
+   4e-6 to 7e-6 costs nothing in loss and raises recall by 59%.
+2. The trained weights store far more at a larger step: +0.3880 at 2e-5, 3.7 times the value at
+   the rate they were trained with, and 14% of full attention (2.6920). The un-tuned model gets
+   only +0.1348 at the same rate, so fine-tuning is what makes the larger step usable.
+3. The larger step costs loss on ordinary text (2.6777 to 2.8318 at 2e-5). These weights were
+   trained at 4e-6, so a larger step at test time is a setting they never saw. Training at the
+   larger step is the obvious next run.
+
 ### PG-19 at 128K, nothing trained
 
 Books of at least 131,073 tokens, so no sequence spans two books; every 25th book held out:
