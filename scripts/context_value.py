@@ -67,6 +67,9 @@ def main() -> None:
     ap.add_argument("--segment", type=int, default=8192, help="S: restart length = the window being bounded")
     ap.add_argument("--eval-sequences", type=int, default=32)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--only-label", default=None,
+                    help="evaluate only sequences whose document carries this label (corpora prepared "
+                         "with --label-field, e.g. RedPajamaArXiv), so each domain gets its own sample")
     a = ap.parse_args()
     T, S = a.seq_len, a.segment
     assert T % S == 0 and T // S >= 2, f"seq_len {T} must be a multiple (>= 2x) of segment {S}"
@@ -81,8 +84,15 @@ def main() -> None:
     seg_loop, seg_split = _loop(model, S, S)
 
     ds = TokenSequenceDataset(Path(a.data), "val", T)
-    order = _shard_indices(len(ds), shuffle=True, seed=a.seed, rank=0, world_size=1)[: a.eval_sequences]
+    order = _shard_indices(len(ds), shuffle=True, seed=a.seed, rank=0, world_size=1)
     docs = sequence_documents(np.asarray(ds.tokens), ds.bos_token_id, T, order)
+    if a.only_label is not None:
+        doc_labels = json.loads((Path(a.data) / "val_docs.json").read_text())["labels"]
+        keep = [i for i, d in enumerate(docs) if doc_labels[d] == a.only_label]
+        assert keep, f"no validation sequence has label {a.only_label!r}; labels present: {sorted(set(doc_labels))}"
+        order, docs = [order[i] for i in keep], [docs[i] for i in keep]
+    order, docs = order[: a.eval_sequences], docs[: a.eval_sequences]
+    assert len(set(docs)) >= 2, f"only {len(set(docs))} document(s) selected: a per-document interval needs at least 2"
 
     full = np.zeros((len(order), T), dtype=np.float64)
     restart = np.zeros((len(order), T), dtype=np.float64)

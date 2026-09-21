@@ -19,6 +19,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq-len", type=int, default=8192)
     ap.add_argument("--chunk", type=int, default=1024)
+    ap.add_argument("--window", type=int, default=8192, help="sliding-window size k (must be >= --chunk)")
     ap.add_argument("--fast-blocks", type=int, default=4)
     ap.add_argument("--dtype", default="bf16")
     ap.add_argument("--remat-blocks", action="store_true")
@@ -34,7 +35,7 @@ def main():
     a = ap.parse_args()
 
     dev = torch.device("cuda")
-    model = build_llama_ttt(MIRROR_REPO, max_seq_len=a.seq_len, window_size=8192,
+    model = build_llama_ttt(MIRROR_REPO, max_seq_len=a.seq_len, window_size=a.window,
                             chunk_size=a.chunk, fast_blocks=a.fast_blocks,
                             lora=None if a.full_slow else LoRAConfig(rank=64, alpha=16.0),
                             dtype=torch.float32).to(dev)
@@ -49,7 +50,7 @@ def main():
                                    ("lora_A", "lora_B", "norm.weight", "inner_lr_log")))
     split = split_parameters(model, model.cfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
-    print(f"config: dtype={a.dtype} fast_blocks={a.fast_blocks} chunk={a.chunk} "
+    print(f"config: dtype={a.dtype} window={a.window} truncate_bptt={a.truncate_bptt} fast_blocks={a.fast_blocks} chunk={a.chunk} "
           f"chunks={cfg.num_chunks} group={loop.group} remat_blocks={a.remat_blocks}", flush=True)
     print(f"after load: {gib(torch.cuda.memory_allocated()):.2f} GiB", flush=True)
     n_slow = sum(v.numel() for v in split.slow.values())
