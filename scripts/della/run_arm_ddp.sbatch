@@ -26,4 +26,7 @@ export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=$((20000 + SLURM_JOB_ID % 20000))
 cd "$ROOT"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-srun .venv/bin/python -m ttt.run "$@"
+# --wait=0: after training the other ranks exit and rank 0 evaluates alone. By default srun
+# TERMINATES the remaining tasks 60 s after the first one exits ("First task exited 60s ago"),
+# which killed rank 0 mid-evaluation in the first 2-GPU validation. 0 means wait indefinitely.
+srun --wait=0 .venv/bin/python -m ttt.run "$@"
