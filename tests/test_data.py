@@ -379,3 +379,32 @@ def test_prepare_writes_labels_aligned_with_the_documents_on_disk(tmp_path, monk
         assert len(docs) == len(labels["labels"]) == len(expected)
         for doc, label, (want_label, want_token) in zip(docs, labels["labels"], expected, strict=True):
             assert label == want_label and set(doc) == {want_token}, (split, label, doc[:3])
+
+
+def test_local_parquet_files_are_read_in_sorted_order(tmp_path) -> None:
+    """--data-files reads downloaded parquet shards offline (compute nodes have no internet).
+    Shards must be read in SORTED name order: that is the order the Hub streams them in, and
+    extending a corpus relies on documents arriving in the original order."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from ttt.data import prepare as prep
+
+    # Written out of order on purpose; names sort 00000 < 00001 < 00002.
+    for shard, texts in (("train-00002-of-00003", ["e", "f"]), ("train-00000-of-00003", ["a", "b"]),
+                         ("train-00001-of-00003", ["c", "d"])):
+        pq.write_table(pa.table({"text": texts, "meta": [{"set": "x"}] * 2}), tmp_path / f"{shard}.parquet")
+
+    spec = prep.PrepareSpec(dataset="unused/when-data-files-is-set", split="train", out_dir=tmp_path / "out",
+                            out_split="train", min_doc_tokens=1, target_tokens=10,
+                            data_files=str(tmp_path / "train-*.parquet"), label_field="meta.set")
+    assert list(prep._hf_items(spec)) == [("x", t) for t in "abcdef"]
+
+
+def test_data_files_that_match_nothing_is_an_error(tmp_path) -> None:
+    from ttt.data import prepare as prep
+
+    spec = prep.PrepareSpec(dataset="unused", split="train", out_dir=tmp_path, out_split="train",
+                            min_doc_tokens=1, target_tokens=10, data_files=str(tmp_path / "nothing-*.parquet"))
+    with pytest.raises(AssertionError, match="matched no files"):
+        list(prep._hf_items(spec))

@@ -1,4 +1,12 @@
 #!/bin/bash
+#SBATCH --account=arora
+#SBATCH --job-name=extend-pg19
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
+#SBATCH --time=03:00:00
+#SBATCH --output=/scratch/gpfs/ARORA/hh9077/logs/%x-%j.out
 # Extend the PG-19 32K TRAINING split, keeping the VALIDATION split byte-identical.
 #
 # pg19_32k was prepared with a 300M-token target; the matched extension budget consumes 760M,
@@ -13,18 +21,20 @@
 #      k % val_every == 0 among the first N; new train = kept documents with k % val_every != 0);
 #   3. replace the new val split by the old one, and record that this was done.
 #
-# Runs on the LOGIN node (needs the internet), CPU only, threads capped, niced, detached:
-#   cd $ROOT; ( nohup scripts/della/extend_pg19.sh > $LOGS/extend_pg19.log 2>&1 < /dev/null & )
+# A CPU COMPUTE job, reading parquet shards downloaded beforehand (download_and_prep.sh): the
+# login node kills tokenisation after ~10 minutes of CPU, and compute nodes have no internet.
 set -euo pipefail
 ROOT=/scratch/gpfs/ARORA/hh9077/ttt-big-fast; LOGS=/scratch/gpfs/ARORA/hh9077/logs; DATA=/scratch/gpfs/ARORA/hh9077/data
 OLD="$DATA/pg19_32k"; NEW="$DATA/pg19_32k_full"
-export HF_HOME=/scratch/gpfs/ARORA/hh9077/hf PYTHONPATH="$ROOT" TOKENIZERS_PARALLELISM=true RAYON_NUM_THREADS=4 OMP_NUM_THREADS=4
+export HF_HOME=/scratch/gpfs/ARORA/hh9077/hf HF_HUB_OFFLINE=1 PYTHONPATH="$ROOT" TOKENIZERS_PARALLELISM=true
+export RAYON_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16} OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16}
+RAW="$DATA/raw/pg19/data/train-*.parquet"
 cd "$ROOT"
 say() { echo "[$(date +%m-%d\ %H:%M:%S)] $*"; }
 
 if [ ! -e "$NEW/READY" ]; then
   say "preparing $NEW (target 9e8 train tokens; the matched budget needs 760,217,600)"
-  nice -n 10 .venv/bin/python -m ttt.data.prepare --dataset emozilla/pg19 --split train --out-dir "$NEW" \
+  .venv/bin/python -m ttt.data.prepare --dataset emozilla/pg19 --split train --data-files "$RAW" --out-dir "$NEW" \
       --min-doc-tokens 32769 --target-tokens 9e8 --val-every 40 --tokenizer-id unsloth/Llama-3.2-1B \
       > "$LOGS/prep_pg19_32k_full.log" 2>&1
   say "prepare finished: $(tail -1 "$LOGS/prep_pg19_32k_full.log" | cut -c1-200)"
@@ -60,10 +70,4 @@ else
   say "$NEW already READY"
 fi
 
-# The orchestrator refused to submit the matched-budget jobs for lack of data. Once any running
-# instance has finished (it may still be waiting on the 2-GPU validation), run it again: it
-# skips what is done and submits.
-while pgrep -u hh9077 -f round2_start.sh > /dev/null; do sleep 60; done
-say "re-running the orchestrator"
-scripts/della/round2_start.sh >> "$LOGS/round2_start.log" 2>&1 || say "orchestrator exited non-zero; see round2_start.log"
 say "=== extend_pg19 finished ==="

@@ -42,9 +42,9 @@ for t in 2 4 8; do
 done
 
 # ---- 3. What is out-of-window context worth on SlimPajama, per source domain? The corpus is
-#         prepared by round2_data.sh (CPU, runs alongside); wait for it here, inside this
+#         prepared by a CPU compute job (download_and_prep.sh); wait for it here, inside this
 #         detached script, never in an SSH session.
-for i in $(seq 1 240); do [ -e "$DATA/slimpajama_32k/val_docs.json" ] && break; sleep 30; done
+for i in $(seq 1 1440); do [ -e "$DATA/slimpajama_32k/val_docs.json" ] && break; sleep 30; done   # up to 12 h
 if [ -e "$DATA/slimpajama_32k/val_docs.json" ]; then
   # One run per domain that has at least 4 validation documents, 24 sequences each.
   labels=$(.venv/bin/python -c "
@@ -62,6 +62,6 @@ print(' '.join(l for l, n in sorted(c.items()) if n >= 4))")
     grep -E 'recent context|sanity|documents\.' "$LOGS/login_cv_slimpajama_$lab.log" | cut -c1-200
   done
 else
-  echo "[FAIL]  slimpajama_32k was not prepared within 2 hours"; failed+=("slimpajama_missing")
+  echo "[FAIL]  slimpajama_32k was not prepared within 12 hours"; failed+=("slimpajama_missing")
 fi
 echo "=== round2_login: failed=${#failed[@]} ${failed[*]:-} ==="

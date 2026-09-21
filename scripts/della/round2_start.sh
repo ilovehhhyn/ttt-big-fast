@@ -32,8 +32,9 @@ fi
 say "matched-budget corpus $MATCH_DATA: $HAVE train tokens ready; the run consumes $NEED"
 
 # ---- 0. Launch the login-node work that needs no gate (both scripts skip what is done).
-# Never two instances at once: both would start the same unfinished item.
-for job in round2_data round2_login; do
+# Never two instances at once: both would start the same unfinished item. Data: the login node
+# only DOWNLOADS; tokenisation runs in CPU compute jobs (it is killed here after ~10 CPU-minutes).
+for job in download_and_prep round2_login; do
   if pgrep -u hh9077 -f "$job.sh" > /dev/null; then say "$job.sh is already running"
   else ( nohup "scripts/della/$job.sh" >> "$LOGS/$job.log" 2>&1 < /dev/null & ); say "launched $job.sh"; fi
 done
@@ -74,11 +75,16 @@ say "GATE PASSED: 2 GPUs reproduce the single-GPU run within 1e-3 nats"
 #         each: the second resumes if the first hits its wall limit, and exits at once otherwise.
 # The loader cycles when the corpus runs out, which would turn one pass over fresh text (what
 # the reference does) into several epochs over a smaller set. Refuse rather than drift.
+# The extended corpus arrives from a queued CPU job (extend_pg19.sbatch). Wait for it here, in
+# this detached script; twelve hours without it means something is wrong.
+for i in $(seq 1 720); do [ -e "$MATCH_DATA/READY" ] && break; [ "$i" -eq 1 ] && say "waiting for $MATCH_DATA/READY"; sleep 60; done
+[ -e "$MATCH_DATA/READY" ] || { say "GATE FAILED: $MATCH_DATA was not READY within 12 hours. Matched-budget jobs NOT submitted."; exit 1; }
+HAVE=$(.venv/bin/python -c "import json;print(json.load(open('$MATCH_DATA/train.json'))['num_tokens'])")
 if [ "$HAVE" -lt "$NEED" ]; then
-  say "GATE FAILED: $MATCH_DATA has $HAVE train tokens ready, fewer than the $NEED the matched budget"
-  say "consumes. scripts/della/extend_pg19.sh prepares it and then reruns this script."
+  say "GATE FAILED: $MATCH_DATA has $HAVE train tokens, fewer than the $NEED the matched budget consumes."
   exit 1
 fi
+say "corpus gate passed: $HAVE train tokens >= $NEED" 
 export SBATCH_SCRIPT=scripts/della/run_arm_ddp.sbatch SBATCH_EXTRA="--ntasks-per-node=4 --gres=gpu:4"
 if ! squeue -u hh9077 -h -o %j | grep -q '^C32k_match_1$'; then
   # 8 sequences per GPU per step at 33 s each = 264 s per step; 725 steps = 53 h, plus evaluation.

@@ -38,6 +38,7 @@ Run ``python -m ttt.data.prepare --help`` for the CLI.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import sys
 import time
@@ -89,6 +90,10 @@ class PrepareSpec:
     # for SlimPajama's source domain. When set, the label of every KEPT document is written,
     # in document order, to <split>_docs.json, so results can be broken down by domain.
     label_field: str | None = None
+    # Glob of LOCAL parquet shards to read instead of streaming `dataset` from the Hub. Compute
+    # nodes have no internet, and tokenising on a login node gets the process killed, so the
+    # shards are downloaded on the login node and tokenised offline in a CPU job.
+    data_files: str | None = None
 
     def __post_init__(self) -> None:
         assert self.min_doc_tokens >= 1
@@ -328,7 +333,15 @@ def _hf_items(spec: PrepareSpec) -> Iterator[tuple[object, str]]:
     """Stream ``(label, text)`` from the HF dataset. Streaming is mandatory: DCLM is ~100B+ tokens."""
     from datasets import load_dataset
 
-    ds = load_dataset(spec.dataset, split=spec.split, streaming=True)
+    if spec.data_files is None:
+        ds = load_dataset(spec.dataset, split=spec.split, streaming=True)
+    else:
+        # SORTED: the Hub streams shards in name order (train-00000-of-N, ...). Reading local
+        # copies in that same order reproduces the original document order exactly, which is
+        # what lets a corpus be extended with its validation split unchanged.
+        files = sorted(glob.glob(spec.data_files))
+        assert files, f"--data-files {spec.data_files!r} matched no files"
+        ds = load_dataset("parquet", data_files=files, split="train", streaming=True)
     for row in ds:
         label = None if spec.label_field is None else _label_of(row, spec.label_field)
         yield label, row[spec.text_field]
@@ -472,6 +485,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="HF tokenizer repo id (use unsloth/Llama-3.2-1B if the gated meta-llama repo 403s)")
     p.add_argument("--val-every", default=defaults["val_every"], type=int,
                    help="every N-th kept document goes to val")
+    p.add_argument("--data-files", default=None,
+                   help="glob of LOCAL parquet shards to read (sorted by name) instead of streaming --dataset "
+                        "from the Hub; for offline tokenisation on a compute node")
     p.add_argument("--label-field", default=None,
                    help='dotted path to a per-document label, e.g. "meta.redpajama_set_name" (SlimPajama); '
                         "kept documents' labels are written to <split>_docs.json")
@@ -492,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
         tokenizer_id=args.tokenizer_id,
         val_every=args.val_every,
         label_field=args.label_field,
+        data_files=args.data_files,
     )
     meta = prepare(spec, progress=not args.no_progress)
     print(json.dumps({k: v for k, v in meta.items()}, indent=2, default=str))
