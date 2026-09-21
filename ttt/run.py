@@ -174,7 +174,10 @@ def _build_arm_e(args, arm, device):
     return cfg, model, split, loop, device
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Every option that defines a model, its inner rule and its data. Shared with the
+    evaluation-only scripts (scripts/recall_probe.py), so that they build exactly the model a
+    training run built and cannot drift from it."""
     p = argparse.ArgumentParser()
     p.add_argument("--arm", required=True, choices=sorted(ARMS))
     p.add_argument("--mode", required=True, choices=["eval", "train"])
@@ -237,6 +240,11 @@ def main() -> None:
     p.add_argument("--eval-sequences", type=int, default=64)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=0)
+    return p
+
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
     assert args.ckpt_every >= 1, f"--ckpt-every must be >= 1, got {args.ckpt_every}"
 

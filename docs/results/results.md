@@ -820,9 +820,11 @@ never spans two books. Same first question: what is context beyond the window wo
 **A task with real long-range dependence (proposed, not built).** Fact recall beyond the window:
 insert a sentence stating a random fact early in a sequence, query it more than k tokens later,
 and score the answer tokens with the fact PRESENT against ABSENT. For a sliding window without
-test-time training that difference is zero by construction, full attention gives the ceiling,
-and whatever test-time training recovers is memory and nothing else: repair of the broken
-window helps all tokens alike and cancels in the difference.
+test-time training that difference is zero by construction once the distance exceeds L x k
+(stacked windowed layers pass information back one window per layer: 16 x 1024 = 16,384 tokens
+at k = 1024, more than T at k = 8192, where the no-TTT run measures the floor instead). Full
+attention gives the ceiling, and whatever test-time training recovers is memory and nothing
+else: repair of the broken window helps all tokens alike and cancels in the difference.
 
 ## 2026-09-21: window k = 1024, and data parallelism
 
@@ -915,3 +917,138 @@ Tokenisation on the login node was killed three times (exit 137) after about 10 
 CPU, niced and capped at 4 threads notwithstanding. The login node now only downloads the
 parquet shards (21 GB in 3.5 minutes); `ttt.data.prepare --data-files` reads them offline in CPU
 compute jobs, which started within a second of submission.
+
+## 2026-09-21, afternoon: 40 steps at k = 1024, other domains, and 128K
+
+### Arm C at k = 1024, 40 steps: does the interaction grow with training?
+
+Same settings as the 10-step pair (PG-19, T = 32768, `truncate_bptt=4`, 4 sequences per step,
+outer lr 4e-4, normalized SGD 4e-6), 40 steps. Prediction written down before the last cell was
+evaluated: the interaction stays near +0.01 (between +0.005 and +0.02) while the TTT effect
+itself shrinks, because the LoRA takes over the repair that TTT was doing.
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop (job 14237563, 41 minutes) | 2.6777 | 2.7086 |
+| plain fine-tune (job 14237564, 23 minutes) | 2.6979 | 2.7196 |
+
+The plain weights were evaluated with TTT through `--load-slow`; their TTT-off evaluation
+reproduced the control's own 2.7196. Per document (32 sequences, 22 books), positive = lower loss:
+
+| effect | 10 steps | 40 steps | 95% CI at 40 steps | documents positive | change |
+|---|---|---|---|---|---|
+| TTT at eval, on meta-learned weights | +0.0559 | +0.0278 | [+0.0210, +0.0347] | 22/22 | -50% |
+| TTT at eval, on plain fine-tuned weights | +0.0433 | +0.0195 | [+0.0143, +0.0248] | 22/22 | -55% |
+| training through the inner loop, TTT on | +0.0772 | +0.0179 | [+0.0137, +0.0220] | 22/22 | -77% |
+| training through the inner loop, TTT off | +0.0646 | +0.0096 | [+0.0060, +0.0132] | 21/22 | -85% |
+| INTERACTION (what H1 is about) | +0.0126 | +0.0083 | [+0.0062, +0.0104] | 22/22 | -34% |
+
+In nats the interaction did not grow: it fell by a third, inside the predicted range. Everything
+else fell faster, as training moved the model towards the healthy level for this window (the
+control went from 3.0682 to 2.7196; healthy is about 2.39). What TTT is worth halved on both
+sets of weights. What training through the inner loop is worth with TTT OFF fell by 85%: that
+part was a head start on repairing the window, and the plain fine-tune is catching up. The
+interaction is the most persistent of the five effects and is positive in all 22 books at both
+lengths. Relative to what TTT is worth on plainly fine-tuned weights it rose from 29% to 43%;
+as a share of what training through the inner loop buys with TTT on, from 16% to 46%.
+
+It remains small, +0.0083 nats or 0.3% of the loss, on models still about 0.3 nats above the
+healthy level, so both rows are still in the repair regime. Language-model loss cannot say
+whether the interaction is memory or a repair that has learned to rely on TTT. The matched
+budget (queued) removes the repair regime; a probe in which repair cancels by construction
+(see "A task with real long-range dependence") is the direct test.
+
+### Where out-of-window context is worth most: SlimPajama by source domain
+
+`DKYoon/SlimPajama-6B` (free, ungated), documents of at least 32,769 Llama-3 tokens, every
+10th document held out: 6,176 training documents (476,513,860 tokens) and 687 validation
+documents (53,238,246 tokens). Training documents by source: CommonCrawl 2,776, arXiv 1,500,
+Book 1,375, GitHub 448, Wikipedia 50, C4 26, StackExchange 1.
+
+`scripts/context_value.py --only-label`, 24 validation sequences per domain, un-tuned model,
+healthy full attention in both conditions; tightest band (the restart condition keeps at least
+7/8 of S recent tokens). `full` and `restart` are token means; the value is the mean over
+documents, so it need not equal their difference exactly.
+
+| corpus, domain | S | full | restart | value (per document) | 95% CI | documents positive |
+|---|---|---|---|---|---|---|
+| PG-19 (from above) | 8192 | 2.3187 | 2.3395 | +0.0208 | [+0.0139, +0.0277] | 21/22 |
+| SlimPajama arXiv | 8192 | 0.9637 | 1.0394 | +0.0814 | [+0.0209, +0.1419] | 20/21 |
+| SlimPajama CommonCrawl | 8192 | 2.1249 | 2.1648 | +0.0392 | [+0.0064, +0.0720] | 16/21 |
+| SlimPajama Book | 8192 | 2.3557 | 2.3876 | +0.0325 | [+0.0177, +0.0472] | 22/23 |
+| SlimPajama GitHub | 8192 | 0.7063 | 0.7361 | +0.0314 | [+0.0134, +0.0494] | 19/21 |
+| SlimPajama Wikipedia (8 sequences, 4 documents) | 8192 | 2.1974 | 2.2101 | +0.0099 | [-0.0008, +0.0206] | 4/4 |
+| PG-19 (from above) | 2048 | 2.2956 | 2.3602 | +0.0667 | [+0.0544, +0.0790] | 22/22 |
+| SlimPajama arXiv | 2048 | 0.9923 | 1.1611 | +0.1752 | [+0.0991, +0.2513] | 21/21 |
+| PG-19 (from above) | 1024 | 2.2920 | 2.3892 | +0.0992 | [+0.0839, +0.1145] | 22/22 |
+| SlimPajama arXiv | 1024 | 1.0178 | 1.2684 | +0.2548 | [+0.1804, +0.3291] | 21/21 |
+| SlimPajama GitHub | 1024 | 0.7572 | 0.9656 | +0.2133 | [+0.1439, +0.2826] | 21/21 |
+
+The sanity check (segment 0, identical input) is exactly 0 in every run. arXiv is where a
+memory has the most to gain: 3.9 times PG-19's ceiling at the reference window k = 8192 and
+2.6 times at k = 1024, where it is a quarter of the healthy loss (0.2548 of 1.0178) against 4%
+on PG-19. Code is close behind at k = 1024. The arXiv intervals are wide: papers differ a lot
+in how much they refer back.
+
+Next on this corpus (jobs 14239404 and 14239405, running): arm C and its `--inner none` control
+at k = 1024, 40 steps, on the SlimPajama mix, scored on the first 96 validation sequences, with
+the context value and the un-tuned window damage measured on the same 96 sequences
+(`scripts/della/login_slimpajama_k1024.sh`). The question is whether what TTT gains on a
+sequence tracks what out-of-window context is worth there (memory) or how much the window
+damages the model there (repair).
+
+### PG-19 at 128K, nothing trained
+
+Books of at least 131,073 tokens, so no sequence spans two books; every 25th book held out:
+6,505 training books (1,466,573,365 tokens), 272 validation books (66,629,305 tokens).
+k = 8192, b = 1024, 16 validation sequences from 16 books (`scripts/della/eval_128k.sbatch`).
+
+| run | loss |
+|---|---|
+| arm A (no TTT) | 4.2900 |
+| arm B (normalized SGD, 4e-6) | 3.9290 |
+
+TTT alone: +0.3610 nats per book, 95% CI [+0.2996, +0.4225], 16 of 16 books
+(`scripts/paired_ttt_effect.py --baseline`). By position:
+
+| tokens | TTT on | TTT off | difference |
+|---|---|---|---|
+| 0 - 8192 (inside the window) | 2.5445 | 2.5476 | +0.0031 |
+| 8192 - 16384 | 4.0942 | 4.2119 | +0.1177 |
+| 24576 - 32768 | 4.1401 | 4.4391 | +0.2991 |
+| 57344 - 65536 | 3.9811 | 4.3631 | +0.3820 |
+| 90112 - 98304 | 4.0219 | 4.4590 | +0.4371 |
+| 122880 - 131072 | 3.8357 | 4.3581 | +0.5224 |
+
+The 32K signature, stronger: nothing inside the window, then a gain that keeps growing with
+position, to +0.52 nats in the last band. With TTT the loss beyond the window FALLS along the
+sequence (4.14 to 3.84); without it, it stays between 4.21 and 4.52. Both arms are far above the
+2.54 seen inside the window, so this is the repair regime again, and at 32K at least 85% of
+such a gain was repair. What out-of-window context is worth at 128K is being scored in pieces
+(`scripts/della/cv_128k.sbatch`): one full-attention float32 forward at 128K takes about
+6 minutes on an A100, and the first attempt, inside the evaluation job, had scored 5 of 12
+sequences after 31 minutes and was cancelled with nothing saved (job 14238061).
+
+### The matched budget: corpus and jobs
+
+The 32K PG-19 training split held 300,119,276 tokens; one pass of the matched budget consumes
+760,217,600 (725 x 32 x 32768), and the loader cycles silently when the corpus runs out. The
+orchestrator's gate refused to submit. `scripts/della/extend_pg19.sbatch` built `pg19_32k_full`
+from the whole PG-19 training stream under the same split rule: 7,626 training books,
+900,080,292 tokens. Verified before use: the new validation file begins with the old one byte
+for byte (34,832,344 bytes) and the new training file with the old one (1,200,477,104 bytes);
+the old validation split was then installed, so every evaluation scores the same 64 books as
+before.
+
+Queued on 2026-09-21, all pending on priority; each is a chain of two links, the second a spare
+that resumes from the checkpoint or exits at once:
+
+| jobs | run | resources per link |
+|---|---|---|
+| 14237614, 14237615 | arm C, k = 8192, 725 steps x 32 sequences, `--eval-ttt-off` | 4 GPUs, 60 h |
+| 14237616, 14237617 | its `--inner none` control | 4 GPUs, 34 h |
+| 14237645, 14237646 | arm C, k = 1024, `truncate_bptt=4`, same budget | 4 GPUs, 24 h |
+| 14237647, 14237648 | its `--inner none` control | 4 GPUs, 16 h |
+
+The single-GPU runs queued on 2026-09-20 (`C32k_t1`, `C32k_t2`, `C32k_ctl20`, `C32k_bs8`,
+`C32k_bs16`, `C32k_bs32`, `C32k_s60`, `C32k_s150`, `C32k_bs32s60`) are still pending.
