@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pytest
 
-from ttt.eval.paired import clustered_paired_stats, paired_stats, sequence_documents
+from ttt.eval.paired import cluster_means, clustered_paired_stats, ols_fit, paired_stats, sequence_documents
 
 BOS = 99
 
@@ -101,3 +101,41 @@ def test_probe_selection_fails_loudly_when_every_candidate_is_contaminated():
         select_probe_position([1, 2, 1, 2, 2], n_eval=2)
     with pytest.raises(AssertionError, match="no held-out sequence"):
         select_probe_position([1, 2], n_eval=2)   # nothing left after the evaluated ones
+
+
+# ---------------------------------------------------------------- regression across documents
+
+
+def test_cluster_means_orders_clusters_and_averages_within():
+    assert cluster_means([1.0, 3.0, 10.0, 5.0], [7, 7, 2, 9]) == [10.0, 2.0, 5.0]  # clusters 2, 7, 9
+
+
+def test_ols_recovers_known_coefficients_exactly_without_noise():
+    rng = np.random.default_rng(0)
+    a, b = rng.normal(size=40), rng.normal(size=40)
+    fit = ols_fit({"a": a.tolist(), "b": b.tolist()}, (0.5 + 2.0 * a - 3.0 * b).tolist())
+    got = {k: v["b"] for k, v in fit["coef"].items()}
+    assert got == pytest.approx({"intercept": 0.5, "a": 2.0, "b": -3.0}, abs=1e-10)
+    assert fit["r2"] == pytest.approx(1.0) and fit["n"] == 40
+
+
+def test_ols_standard_error_matches_the_textbook_simple_regression():
+    # One regressor: se(b) = s / sqrt(sum (x - xbar)^2), s^2 = RSS / (n - 2).
+    rng = np.random.default_rng(1)
+    x = rng.normal(size=30)
+    y = 1.0 + 0.7 * x + rng.normal(scale=0.3, size=30)
+    fit = ols_fit({"x": x.tolist()}, y.tolist())
+    b = fit["coef"]["x"]["b"]
+    resid = y - (fit["coef"]["intercept"]["b"] + b * x)
+    se = math.sqrt(float(resid @ resid) / 28 / float(((x - x.mean()) ** 2).sum()))
+    assert fit["coef"]["x"]["se"] == pytest.approx(se, rel=1e-10)
+    lo, hi = fit["coef"]["x"]["ci95"]
+    assert lo < 0.7 < hi  # the interval covers the truth in this draw
+
+
+def test_ols_refuses_collinear_columns_and_too_few_observations():
+    x = [1.0, 2.0, 3.0, 4.0]
+    with pytest.raises(AssertionError, match="collinear"):
+        ols_fit({"x": x, "twice": [2 * v for v in x]}, [1.0, 2.0, 2.5, 4.0])
+    with pytest.raises(AssertionError, match="more observations"):
+        ols_fit({"x": [1.0, 2.0]}, [1.0, 2.0])
