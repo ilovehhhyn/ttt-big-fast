@@ -1029,11 +1029,10 @@ By domain, the un-tuned gain follows the DAMAGE, not the ceiling: TTT recovers a
 the damage everywhere, and gains most on books, where the ceiling is lowest. Across the 88
 documents, gain = b0 + b_ceiling x ceiling + b_damage x damage gives b_damage = +0.215
 [+0.184, +0.246] and b_ceiling = +0.438 [+0.273, +0.603] (R2 0.69; ceiling and damage correlate
-at -0.35, so they can be told apart). Read with care: the intercept is about -0.12 nats, so the
-line is a description, not a structural model, and a ceiling coefficient can be produced by
-anything that travels with the ceiling (easy, repetitive text; source domain). The script now
-prints two specifications that could undercut it (loss level added; domain indicators added);
-they had not been run on the real data when the SSH session lapsed.
+at -0.35, so they can be told apart). The intercept is -0.116 nats, so the line is a description,
+not a structural model. Two checks that could remove the ceiling coefficient did not: adding
+the loss level gives +0.421 [+0.243, +0.598]; adding domain indicators gives +0.453
+[+0.274, +0.632].
 
 40 steps, same settings as the PG-19 pair (jobs 14239404 and 14239405; 40 and 21 minutes), each
 job's own evaluation on the first 32 sequences:
@@ -1041,11 +1040,83 @@ job's own evaluation on the first 32 sequences:
 | slow weights | TTT on at eval | TTT off at eval |
 |---|---|---|
 | trained through the inner loop | 2.3600 | 2.4018 |
-| plain fine-tune (`--inner none`) | (pending) | 2.4086 |
+| plain fine-tune (`--inner none`) | - | 2.4086 |
 
-TTT is worth +0.0418 on the meta-learned weights here against +0.0309 on PG-19 at the same
-length (aggregate differences). The 96-sequence cells, the 2x2 and the per-document analysis
-run from `scripts/della/login_sp_cells.sh`.
+All four combinations on the 96 sequences (`scripts/della/login_sp_cells.sh`; the loaded
+weights reproduce the jobs' own numbers on the first 32 sequences to 3e-5):
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop | 2.2789 | 2.3193 |
+| plain fine-tune | 2.2920 | 2.3252 |
+
+| effect, per document (88 documents) | mean | 95% CI | documents positive |
+|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0418 | [+0.0318, +0.0518] | 88/88 |
+| TTT at eval, plain fine-tuned weights | +0.0345 | [+0.0257, +0.0432] | 88/88 |
+| training with TTT, evaluated with TTT | +0.0134 | [+0.0122, +0.0146] | 88/88 |
+| training with TTT, evaluated without | +0.0060 | [+0.0039, +0.0082] | 74/88 |
+| INTERACTION | +0.0074 | [+0.0056, +0.0091] | 85/88 |
+
+The interaction matches PG-19 at the same length (+0.0083). By domain, the gains of the
+TRAINED models are largest where old context is worth most, unlike the un-tuned gain:
+
+| domain | ceiling | TTT gain, trained with TTT | TTT gain, plain fine-tune | interaction |
+|---|---|---|---|---|
+| GitHub | +0.2582 | +0.0990 | +0.0752 | +0.0238 |
+| arXiv | +0.2500 | +0.0425 | +0.0338 | +0.0087 |
+| CommonCrawl | +0.1186 | +0.0318 | +0.0268 | +0.0050 |
+| Book | +0.1092 | +0.0371 | +0.0317 | +0.0055 |
+
+Across the 88 documents (gain = b0 + b_ceiling x ceiling + b_damage x damage; the second and
+third columns add the loss level and domain indicators to see whether the ceiling coefficient
+goes away):
+
+| gain | b_ceiling | + loss level | + domain | b_damage |
+|---|---|---|---|---|
+| TTT at eval, trained with TTT | +0.261 [+0.206, +0.315] | +0.238 | +0.244 | +0.224 [+0.170, +0.278] |
+| TTT at eval, plain fine-tune | +0.223 [+0.174, +0.273] | +0.208 | +0.215 | +0.200 [+0.153, +0.248] |
+| interaction | +0.040 [+0.028, +0.053] | +0.032 | +0.032 | +0.009 [-0.004, +0.021] |
+
+The TTT gain follows both the damage and the ceiling. The interaction follows the ceiling and
+not the damage: training with TTT helps most on documents where old context is worth most.
+This is a correlation across documents, not a direct measurement of memory. The recall test
+below is the direct measurement.
+
+### Recall test: does TTT remember text the model can no longer see?
+
+`scripts/recall_probe.py`. A 1024-token passage from another book is written into a PG-19
+validation sequence at tokens 2048-3071 and again at tokens 20480-21503. We measure the loss
+on the second copy, with and without the first copy in the input. recall = loss without the
+first copy - loss with it (nats per token; the first 32 tokens of the second copy are not
+scored). At k = 1024 attention can reach back at most 16 layers x 1023 tokens = 16,368, less
+than the 17,408 tokens between the copies, so a model without TTT cannot see the first copy
+and its recall must be exactly 0. 32 sequences, 20 books.
+
+| model | recall with TTT | 95% CI | books positive | recall without TTT |
+|---|---|---|---|---|
+| un-tuned, k = 1024 | +0.0717 | [+0.0651, +0.0783] | 20/20 | 0 (exact) |
+| 40 steps, trained with TTT (arm C) | +0.1054 | [+0.1010, +0.1097] | 20/20 | 0 (exact) |
+| 40 steps, plain fine-tune | +0.1018 | [+0.0976, +0.1060] | 20/20 | 0 (exact) |
+| un-tuned, inner LR 2e-5 | +0.1348 | [+0.0865, +0.1830] | 19/20 | not run |
+| un-tuned, inner LR 5e-5 | +0.1348 | [-0.7429, +1.0125] | 11/20 | not run |
+| un-tuned, copies 4096 tokens apart | +0.0883 | [+0.0801, +0.0965] | 21/21 | -0.0007 [-0.0016, +0.0002] |
+| un-tuned, FULL attention, no TTT | - | | | +2.6920 [+2.4448, +2.9393] |
+
+Full attention copies the passage almost perfectly (loss 2.6585 without the first copy, 0.0072
+with it). Trained with TTT minus plain fine-tune, same sequences: +0.0036 [+0.0018, +0.0053],
+18 of 20 books. Trained with TTT minus un-tuned: +0.0337 [+0.0262, +0.0413], 20 of 20.
+
+Prediction written before the runs: +0.01 to +0.05. Observed: +0.07 to +0.11.
+
+1. TTT stores the passage in the fast weights. Recall is positive in every book and exactly
+   zero without TTT, so nothing else can explain it.
+2. The memory is weak: about 4% of what full attention recalls (0.1054 of 2.6920).
+3. Training with TTT improves recall only slightly over plain fine-tuning (+0.0036, about 3%).
+   Most of the improvement over the un-tuned model comes from fine-tuning itself.
+4. A larger inner step stores more (+0.0717 at 4e-6, +0.1348 at 2e-5) until the model becomes
+   unstable (5e-5). The step size that is best for the loss is not the best for memory.
+5. Stacked attention windows pass nothing: 4096 tokens apart, recall without TTT is -0.0007.
 
 ### PG-19 at 128K, nothing trained
 
@@ -1083,7 +1154,8 @@ First piece (6 sequences, 6 books; job 14239478, 33 minutes), S = 8192, tightest
 full 2.6419, restart 2.6742, value +0.0323 per book, 95% CI [-0.0000, +0.0647], 6 of 6 positive;
 sanity difference exactly 0. At 128K the ceiling on PG-19 is about +0.03 against +0.0208 at 32K:
 four times the context adds little that a healthy model can use. Books are not where a
-long-range memory pays; the second piece (job 14239517) was running when this was written.
+long-range memory pays. Second piece (6 more books, job 14239517): +0.0385 [+0.0197, +0.0573],
+6 of 6 positive.
 
 ### The matched budget: corpus and jobs
 
