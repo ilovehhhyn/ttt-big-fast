@@ -1215,6 +1215,69 @@ sequences: Muon 2e-5 recall +0.1263, loss 4.8869; normalized SGD 1e-5 recall +0.
 no TTT 5.1782). The agents predicted it needs a 10 to 30 times larger rate; those runs are in
 `scripts/della/recall_muon.sbatch`.
 
+### Two write rules that equalize the update: measured on Llama
+
+Same recall test and the same 32 sequences as above (`scripts/della/login_recall_preconditioned.sh`,
+`scripts/della/recall_muon.sbatch`). "Loss" is the ordinary loss on the 32 standard validation
+sequences. The two rules:
+
+- **preconditioned**: the 64 strongest shared key directions of each fast matrix are removed
+  from the gradient before it is normalized (`--inner preconditioned_sgd`, c = 0). On Llama one
+  direction carries 32-60% of the key energy of a fast matrix and 64 directions carry 55-83%
+  (`scripts/key_basis.py`, 65,536 training tokens).
+- **Muon**: every singular value of the gradient is set to 1 before the step (`--inner muon`).
+  The largest singular value of a normalized-SGD update is up to sqrt(min(m, n)) = 45 times
+  Muon's at the same per-element size, which is why Muon tolerates a much larger rate.
+
+Un-tuned model (best normalized-SGD entries repeated for comparison):
+
+| rule | inner LR | recall | 95% CI | loss |
+|---|---|---|---|---|
+| no TTT | - | 0 | | 4.9895 |
+| normalized SGD | 4e-6 | +0.0717 | [+0.0651, +0.0783] | 4.5232 |
+| normalized SGD | 1.4e-5 | +0.1563 | [+0.1263, +0.1862] | 4.6035 |
+| preconditioned | 4e-6 | +0.0739 | [+0.0685, +0.0793] | 4.8059 |
+| preconditioned | 1e-5 | +0.1748 | [+0.1645, +0.1850] | 4.6634 |
+| preconditioned | 2e-5 | +0.3013 | [+0.2790, +0.3236] | 4.5698 |
+| preconditioned | 4e-5 | +0.4858 | [+0.4368, +0.5348] | 4.5517 |
+| preconditioned | 1e-4 | unstable | | 7.2559 |
+| preconditioned, 30% of the shared part kept | 2e-5 | +0.2533 | [+0.2134, +0.2933] | 4.6275 |
+| Muon (16 pairs, 16 sequences) | 2e-5 | +0.1263 | [+0.1198, +0.1360] | 4.8869 |
+| Muon | 4e-5 | +0.2488 | [+0.2366, +0.2609] | 4.5619 |
+| Muon | 1.2e-4 | +0.6865 | [+0.6488, +0.7242] | 4.3290 |
+
+40-step weights trained with normalized SGD at 4e-6 (the preconditioned rule uses key directions
+measured on these weights; they are less concentrated: 47-73% in 64 directions):
+
+| rule | inner LR | recall | 95% CI | loss |
+|---|---|---|---|---|
+| normalized SGD | 4e-6 | +0.1054 | [+0.1010, +0.1097] | 2.6777 |
+| normalized SGD | 2e-5 | +0.3880 | [+0.3105, +0.4655] | 2.8318 |
+| preconditioned | 1e-5 | +0.2423 | [+0.2271, +0.2575] | 2.6746 |
+| preconditioned | 2e-5 | +0.4513 | [+0.4137, +0.4889] | 2.6907 |
+| preconditioned | 4e-5 | +0.7025 | [+0.5986, +0.8064] | 2.7648 |
+| preconditioned | 1e-4 | unstable | | 5.4698 |
+| Muon | 2e-5 | +0.2066 | [+0.1937, +0.2195] | 2.6742 |
+| Muon | 4e-5 | +0.4183 | [+0.3918, +0.4448] | 2.6636 |
+| Muon | 1.2e-4 | +1.0241 | [+0.9555, +1.0927] | 2.6895 |
+
+1. Both rules do what the diagnosis predicts: at equal loss they store several times more.
+   At a step 30 times the old one, Muon on the trained weights recalls +1.0241, 38% of full
+   attention (2.6920), against 4% before, and the loss is within 0.012 of the old value. On the
+   un-tuned model Muon at 1.2e-4 gives 9.6 times the recall AND a lower loss (4.3290 against
+   4.5232).
+2. Muon beats the preconditioned rule at every step size tried, and stays stable to a larger
+   step. Removing 64 key directions leaves a gradient whose remaining directions are still
+   uneven; Muon flattens all of them.
+3. On the un-tuned model at the OLD step size the preconditioned rule hurts the loss (4.8059):
+   the shared directions are part of what repairs the broken window there. At larger steps this
+   no longer shows.
+4. Cost: Muon's Newton-Schulz iteration runs in float32 and made an evaluation pass 20 seconds
+   per sequence on an A100 against 3.4; the preconditioned rule costs nothing measurable. The
+   iteration can run in bf16 or under TF32 (not done yet). Nothing is meta-trained through
+   either rule yet; short validation runs of Muon meta-training were submitted (jobs 14247911,
+   14247912) to measure its memory and speed.
+
 ### PG-19 at 128K, nothing trained
 
 Books of at least 131,073 tokens, so no sequence spans two books; every 25th book held out:
