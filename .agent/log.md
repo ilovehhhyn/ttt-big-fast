@@ -39,3 +39,7 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   The 2x2 at window 8192 and 20 steps: interaction +0.0058, 22/22 books (10 steps: +0.0015).
   Meta-training through Muon fits (286 s per step, 60.4 GiB); the 40-step run submitted as a
   chain of short-queue links (14333213 to 14333217). 60-step plain control: 2.5255.
+  Evening: the 60-step 2x2 at window 8192 landed: interaction +0.0077 [+0.0058, +0.0096],
+  21/22 books; with TTT off the plain fine-tune is now slightly better (-0.0024). New agent
+  took over at 18:30; suite passed locally (237 tests); Muon 40-step link 1 running at 301 s
+  per step on its A100 (286 in the validation job).

@@ -46,6 +46,7 @@ context is worth most".
 |---|---|---|---|---|---|---|
 | window 8192, 10 steps | 2.6688 / 2.6888 | 2.6944 / 2.7124 | +0.0015 | [+0.0005, +0.0026] | 17/22 | "The 2x2 behind H1" |
 | window 8192, 20 steps | 2.5957 / 2.6133 | 2.6040 / 2.6139 | +0.0058 | [+0.0028, +0.0089] | 22/22 | "The 2x2 at window 8192, 20 steps" |
+| window 8192, 60 steps | 2.5146 / 2.5294 | 2.5187 / 2.5255 | +0.0077 | [+0.0058, +0.0096] | 21/22 | "The 2x2 at window 8192, 60 steps" |
 | window 1024, 10 steps | 2.9440 / 3.0041 | 3.0212 / 3.0682 | +0.0126 | [+0.0098, +0.0153] | 22/22 | "Arm C at k = 1024, 10 steps" |
 | window 1024, 40 steps | 2.6777 / 2.7086 | 2.6979 / 2.7196 | +0.0083 | [+0.0062, +0.0104] | 22/22 | "Arm C at k = 1024, 40 steps" |
 | SlimPajama, window 1024, 40 steps, 96 sequences | 2.2789 / 2.3193 | 2.2920 / 2.3252 | +0.0074 | [+0.0056, +0.0091] | 85/88 | "SlimPajama at k = 1024" |
@@ -132,7 +133,7 @@ the strongest direction carries 32 to 60% of the key energy and 64 directions ca
 ## Pending numbers
 
 The 40-step meta-training through Muon (jobs 14333213 to 14333217); the 150-step plain control
-(14330259) and the 60- and 150-step 2x2 at window 8192; `C32k_bs32s60` (14169729, running); the
+(14330259) and the 150-step 2x2 at window 8192 (the 60-step 2x2 landed: interaction +0.0077); `C32k_bs32s60` (14169729, running); the
 matched-budget chains on PLI in `plan.md`. Measured today: meta-training through Muon fits
 (286 s per step, peak 60.4 GiB, window 1024, truncation 4); the 60-step plain control at window
 8192 scores 2.5255.

@@ -68,8 +68,9 @@ clustered by document (`ttt/eval/paired.py`).
    stays cheap. Both confirm the diagnosis.
 5. At the reference window the prize stays small however long the LoRA trains: what TTT adds
    on the same weights falls from +0.0248 (8 steps) to +0.0067 (150 steps). The interaction
-   there grew from +0.0015 (10 steps, 17/22) to +0.0058 (20 steps, 22/22); the 60- and 150-step
-   2x2 will say whether it keeps growing.
+   there grew from +0.0015 (10 steps, 17/22) to +0.0058 (20 steps, 22/22) and +0.0077 (60
+   steps, 21/22); the 150-step 2x2 will say whether it keeps growing (prediction: +0.005 to
+   +0.010).
 
 ## Queued on Della (all resumable; each chain link resumes from the checkpoint)
 

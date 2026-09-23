@@ -1438,3 +1438,31 @@ The 60-step plain control at window 8192 (`C32k_ctl60`, job 14330258, 2 GPUs, 37
 loop (`C32k_s60`). Its evaluation with TTT on, and the same for the 150-step pair, run from
 `scripts/della/login_cells_k8192_s60_s150.sh`.
 
+### The 2x2 at window 8192, 60 steps
+
+The 60-step plain weights (`C32k_ctl60`) evaluated with TTT on and off on the login GPU
+(`scripts/della/login_cells_k8192_s60_s150.sh`, `results/cell_plainft_60.json`); the TTT-off
+evaluation reproduced the control's own 2.5255. Same settings as the 20-step 2x2.
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop (`C32k_s60`) | 2.5146 | 2.5294 |
+| plain fine-tune (`C32k_ctl60`) | 2.5187 | 2.5255 |
+
+| effect, per book (22 books) | 20 steps | 60 steps | 95% CI at 60 steps | books positive |
+|---|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0142 | +0.0125 | [+0.0082, +0.0167] | 22/22 |
+| TTT at eval, plain fine-tuned weights | +0.0084 | +0.0048 | [+0.0008, +0.0087] | 16/22 |
+| training with TTT, evaluated with TTT | +0.0104 | +0.0053 | [+0.0024, +0.0081] | 21/22 |
+| training with TTT, evaluated without | +0.0045 | -0.0024 | [-0.0064, +0.0015] | 5/22 |
+| INTERACTION | +0.0058 | +0.0077 | [+0.0058, +0.0096] | 21/22 |
+
+At the reference window the interaction has grown at every step count so far: +0.0015 (10
+steps), +0.0058 (20), +0.0077 (60). With TTT off, the plain fine-tune is now slightly better
+than the weights trained through the inner loop (-0.0024, 17 of 22 books), so training through
+the inner loop no longer gives better slow weights on its own; what it gives is weights that
+use TTT better. On the plain weights TTT is worth only +0.0048 and is positive in 16 of 22
+books. Prediction for the 150-step 2x2, written before its control finished: interaction
+between +0.005 and +0.010; TTT on the plain weights below +0.005.
+
+
