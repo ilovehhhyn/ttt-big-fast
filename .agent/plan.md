@@ -144,3 +144,5 @@ the method a hybrid; it is kept only as a possible baseline (`literature.md`, "C
 
 <!-- 2.4e-4 is the inner rate of job 14247913, taken from its sbatch command, not from a recorded result -->
 <!-- derived: 2.4e-4 -->
+
+<!-- derived: 0.5 -->

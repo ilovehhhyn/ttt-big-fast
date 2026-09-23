@@ -123,3 +123,5 @@ A result JSON holds `args` (every setting), `history` (per-step loss, grad norm,
 recall JSON holds `pairs`, per-condition `per_pair_recall` and `recall_by_offset`, and
 `exact_floor_violations`. Quote per-document intervals, never per-sequence ones: the 32
 PG-19 sequences come from 22 books.
+
+<!-- derived: 0.5 -->
