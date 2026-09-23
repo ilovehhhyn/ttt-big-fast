@@ -34,7 +34,8 @@ week. The cluster rules are hard rules; each one is an incident.
 | fact | value |
 |---|---|
 | account, QOS for short jobs | `--account=arora`; `--qos=gpu-test`: at most 61 minutes, 3 jobs per user (a 4th pends with `QOSMaxJobsPerUserLimit`), starts within minutes |
-| long jobs | wait about 5 to 7 days; a dependent chain link ages only after its predecessor ends |
+| long jobs on `arora` | wait about 5 to 7 days; a dependent chain link ages only after its predecessor ends |
+| long jobs on PLI (since 2026-09-23) | `--account=pli_x --partition=pli --qos=pli-low`: 38 nodes of 8 H100s, 15-day limit, no preemption (`PreemptMode=OFF`), at most 16 GPUs at once per user, priority 0 among PLI jobs; a 4-GPU 48-hour job was estimated to start the next evening. `pli-lc` is the same with a 3-day limit. Pass these on the command line or through `SBATCH_EXTRA` for `submit_chain.sh`; they override the `#SBATCH --account=arora` header |
 | GPU memory | always `--constraint=gpu80` (the partition mixes 40 and 80 GiB A100s); in every sbatch script |
 | speed | a batch A100 is about 2.1x slower than the login H100; size wall time from a BATCH node and include model load (about 1 min) and evaluation (about 4 min per 32 sequences at 32K, doubled by `--eval-ttt-off`, 6x with Muon) |
 | multi-GPU | `scripts/della/run_arm_ddp.sbatch` with `srun --wait=0` (srun otherwise kills the remaining ranks 60 s after rank 0's peers exit) |

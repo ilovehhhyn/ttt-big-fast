@@ -34,4 +34,5 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   trained at 2e-5 recall +0.5201. The Muon meta-training validation had been submitted with
   `--steps 3`, which the warmup check rejects (the checklist says 5); resubmitted. Plain
   controls for the 60- and 150-step runs and the 20-step 2x2 launched. This handoff folder
-  written.
+  written. Helen's PLI account (`pli_x`, H100 nodes) verified; the four matched-budget
+  chains moved there (jobs 14330761 to 14330768), the `arora` copies cancelled.

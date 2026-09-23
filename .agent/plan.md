@@ -71,12 +71,17 @@ clustered by document (`ttt/eval/paired.py`).
 
 ## Queued on Della (all resumable; each chain link resumes from the checkpoint)
 
+The four matched-budget chains moved on 2026-09-23 from the `arora` queue (estimated start
+about a week out, A100s) to the PLI partition (`--account=pli_x --partition=pli --qos=pli-low`,
+H100s, estimated start 2026-09-24 evening, no preemption). Same settings and result paths;
+the `arora` copies (14237614 to 14237617, 14237645 to 14237648) were cancelled first.
+
 | jobs | run | resources | purpose |
 |---|---|---|---|
-| 14237614, 14237615 | `C32k_match`: arm C, window 8192, 725 x 32, normalized SGD 4e-6, `--eval-ttt-off` | 4 GPUs, 60 h | the reference budget |
-| 14237616, 14237617 | `C32k_match_ctl`: same with `--inner none` | 4 GPUs, 34 h | its plain fine-tuning control |
-| 14237645, 14237646 | `Ck1024_match`: window 1024, `truncate_bptt=4`, same budget | 4 GPUs, 24 h | the reference budget where the ceiling is larger |
-| 14237647, 14237648 | `Ck1024_match_ctl` | 4 GPUs, 16 h | its control |
+| 14330761, 14330762 | `C32k_match`: arm C, window 8192, 725 x 32, normalized SGD 4e-6, `--eval-ttt-off` | 4 H100s, 48 h per link | the reference budget |
+| 14330763, 14330764 | `C32k_match_ctl`: same with `--inner none` | 4 H100s, 30 h | its plain fine-tuning control |
+| 14330765, 14330766 | `Ck1024_match`: window 1024, `truncate_bptt=4`, same budget | 4 H100s, 24 h | the reference budget where the ceiling is larger |
+| 14330767, 14330768 | `Ck1024_match_ctl` | 4 H100s, 16 h | its control |
 | 14169729 | `C32k_bs32s60`: 60 steps of 32 sequences (63M tokens), running since 2026-09-23 09:55 | 1 GPU, 22 h | closest single-GPU approach to the reference regime |
 | 14330258, 14330259 | `C32k_ctl60` (2 GPUs), `C32k_ctl150` (4 GPUs): `--inner none` controls for the 60- and 150-step runs | `gpu-test`, 1 h | the 2x2 at 60 and 150 steps |
 | 14330212, 14330213 | `muonval_t4`, `muonval_t2`: 5 steps of arm C through Muon at 1.2e-4 | `gpu-test`, 1 h | memory and speed of meta-training through Muon |

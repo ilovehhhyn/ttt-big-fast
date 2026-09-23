@@ -15,7 +15,8 @@
 #
 # Environment:
 #   SBATCH_SCRIPT  job script (default scripts/della/run_arm.sbatch; run_arm_ddp.sbatch for multi-GPU)
-#   SBATCH_EXTRA   extra sbatch options, e.g. "--ntasks-per-node=4 --gres=gpu:4"
+#   SBATCH_EXTRA   extra sbatch options, e.g. "--ntasks-per-node=4 --gres=gpu:4"; for the PLI H100 nodes add
+#                  "--account=pli_x --partition=pli --qos=pli-low" (overrides the script's --account=arora header)
 set -euo pipefail
 NAME=$1; LINKS=$2; HOURS=$3; shift 3
 ROOT=/scratch/gpfs/ARORA/hh9077/ttt-big-fast
