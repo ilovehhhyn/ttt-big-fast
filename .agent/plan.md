@@ -67,7 +67,9 @@ clustered by document (`ttt/eval/paired.py`).
    for +0.116 in loss. The preconditioned rule (shared key directions removed) gives 26% and
    stays cheap. Both confirm the diagnosis.
 5. At the reference window the prize stays small however long the LoRA trains: what TTT adds
-   on the same weights falls from +0.0248 (8 steps) to +0.0067 (150 steps).
+   on the same weights falls from +0.0248 (8 steps) to +0.0067 (150 steps). The interaction
+   there grew from +0.0015 (10 steps, 17/22) to +0.0058 (20 steps, 22/22); the 60- and 150-step
+   2x2 will say whether it keeps growing.
 
 ## Queued on Della (all resumable; each chain link resumes from the checkpoint)
 
@@ -84,8 +86,7 @@ the `arora` copies (14237614 to 14237617, 14237645 to 14237648) were cancelled f
 | 14330767, 14330768 | `Ck1024_match_ctl` | 4 H100s, 16 h | its control |
 | 14169729 | `C32k_bs32s60`: 60 steps of 32 sequences (63M tokens), running since 2026-09-23 09:55 | 1 GPU, 22 h | closest single-GPU approach to the reference regime |
 | 14330258, 14330259 | `C32k_ctl60` (2 GPUs), `C32k_ctl150` (4 GPUs): `--inner none` controls for the 60- and 150-step runs | `gpu-test`, 1 h | the 2x2 at 60 and 150 steps |
-| 14330212, 14330213 | `muonval_t4`, `muonval_t2`: 5 steps of arm C through Muon at 1.2e-4 | `gpu-test`, 1 h | memory and speed of meta-training through Muon |
-| login GPU | `scripts/della/login_cells_k8192_s20.sh`: both 20-step weight sets evaluated with TTT on and off | 25 min | the 2x2 at window 8192, 20 steps |
+| 14330856, 14330857 | `muonval_t4`, `muonval_t2`: 6 steps of arm C through Muon at 1.2e-4 (5 steps also rounds the 10% warmup to zero) | `gpu-test`, 1 h | memory and speed of meta-training through Muon |
 
 All of these use the ORIGINAL write rule (normalized SGD at 4e-6). They test the thesis at the
 reference budget with the weak memory. Keep them; add a Muon run at that budget once Muon
@@ -100,8 +101,10 @@ meta-training is validated and its orthogonalization is sped up.
 - Muon at 2.4e-4 on the 40-step weights: recall +1.5005 (56% of full attention), loss 2.7937.
 - Weights trained at normalized SGD 2e-5: recall +0.5201, loss 2.7243 (trained at 4e-6 and
   tested at 2e-5: +0.3880, 2.8318).
-- The first Muon meta-training validation (jobs 14247911, 14247912) never trained: `--steps 3`
-  makes the 10% warmup round to zero, a hard error by design. Resubmitted with `--steps 5`.
+- The first Muon meta-training validations (jobs 14247911, 14247912, then 14330212) never
+  trained: `--steps 3` and `--steps 5` both make the 10% warmup round to zero (Python rounds
+  0.5 down), a hard error by design whose message had named the wrong fix. Message fixed;
+  resubmitted with `--steps 6`.
 
 Read a job with `grep -E '^\[eval\]|^ttt_on|step' /scratch/gpfs/ARORA/hh9077/logs/<name>-<job>.out`.
 
@@ -110,7 +113,7 @@ Read a job with `grep -E '^\[eval\]|^ttt_on|step' /scratch/gpfs/ARORA/hh9077/log
 Meta-train the LoRA through Muon. It separates the two explanations for the small interaction:
 either H1 is wrong, or the write was too weak for the slow weights to have anything to shape.
 
-1. If `muonval_t4` (job 14330212) fit and took under 300 s per step: submit 40 steps of arm C with
+1. If `muonval_t4` (job 14330856) fit and took under 300 s per step: submit 40 steps of arm C with
    `--inner muon --inner-lr 1.2e-4`, `--eval-ttt-off`, and the `--inner none` control (the
    existing `C_32k_k1024_ctl_s40` control was trained with the same outer settings and can be
    reused: its weights do not depend on the inner rule). Use a chain of 1-hour `gpu-test`

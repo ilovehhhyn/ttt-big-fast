@@ -53,8 +53,9 @@ week. The cluster rules are hard rules; each one is an incident.
    An arm once had an EMPTY slow set; a placeholder arm once equalled arm C.
 5. Inner rate in the unit 1/sqrt(n_fast) = 7.05e-5 for 201M fast parameters. There is no
    default: `--inner-lr` is required. 1e-3 diverges (loss 20).
-6. Warmup fractions round to zero below 5 steps and hard-error; use `--steps >= 5`. This
-   caught two validation jobs submitted with `--steps 3` on 2026-09-22 (jobs 14247911, 14247912).
+6. A 10% warmup rounds to zero below 6 steps and hard-errors (Python rounds 0.5 to 0); use
+   `--steps >= 6`. This caught validation jobs submitted with `--steps 3` and `--steps 5`
+   (14247911, 14247912, 14330212); the error message now names the smallest count that works.
 7. Run a short validation job that reaches evaluation and writes its result before any long
    job, then size the long job from its `sec_per_step`.
 8. Memory: measure, do not reason. `scripts/memory_probe.py` with `--truncate-bptt`,

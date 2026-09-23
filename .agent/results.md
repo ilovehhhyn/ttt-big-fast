@@ -45,6 +45,7 @@ context is worth most".
 | setting | trained through the inner loop | plain fine-tune | interaction | 95% CI | positive | R section |
 |---|---|---|---|---|---|---|
 | window 8192, 10 steps | 2.6688 / 2.6888 | 2.6944 / 2.7124 | +0.0015 | [+0.0005, +0.0026] | 17/22 | "The 2x2 behind H1" |
+| window 8192, 20 steps | 2.5957 / 2.6133 | 2.6040 / 2.6139 | +0.0058 | [+0.0028, +0.0089] | 22/22 | "The 2x2 at window 8192, 20 steps" |
 | window 1024, 10 steps | 2.9440 / 3.0041 | 3.0212 / 3.0682 | +0.0126 | [+0.0098, +0.0153] | 22/22 | "Arm C at k = 1024, 10 steps" |
 | window 1024, 40 steps | 2.6777 / 2.7086 | 2.6979 / 2.7196 | +0.0083 | [+0.0062, +0.0104] | 22/22 | "Arm C at k = 1024, 40 steps" |
 | SlimPajama, window 1024, 40 steps, 96 sequences | 2.2789 / 2.3193 | 2.2920 / 2.3252 | +0.0074 | [+0.0056, +0.0091] | 85/88 | "SlimPajama at k = 1024" |
@@ -130,7 +131,6 @@ the strongest direction carries 32 to 60% of the key energy and 64 directions ca
 
 ## Pending numbers
 
-Muon meta-training memory and speed (jobs 14330212, 14330213); the 20-step 2x2 at window 8192
-(`login_cells_k8192_s20.sh`); the 60- and 150-step plain controls (14330258, 14330259);
+Muon meta-training memory and speed (jobs 14330856, 14330857); the 60- and 150-step plain controls (14330258, 14330259);
 `C32k_bs32s60` (14169729, running); the matched-budget chains in `plan.md`.
 

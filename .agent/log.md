@@ -36,3 +36,4 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   controls for the 60- and 150-step runs and the 20-step 2x2 launched. This handoff folder
   written. Helen's PLI account (`pli_x`, H100 nodes) verified; the four matched-budget
   chains moved there (jobs 14330761 to 14330768), the `arora` copies cancelled.
+  The 2x2 at window 8192 and 20 steps: interaction +0.0058, 22/22 books (10 steps: +0.0015).

@@ -1376,9 +1376,34 @@ Paired comparisons (`scripts/paired_ttt_effect.py --baseline`):
    healthy windowed level (about 2.33), so the repair is not finished either.
 2. At equal tokens, more steps beat a larger batch: 150 steps of 4 sequences (19.7M tokens)
    reach 2.4664; 20 steps of 32 sequences (21.0M tokens) reach 2.5664.
-3. The 20-step 2x2 (both sets of weights evaluated on and off) and plain controls for the 60-
-   and 150-step runs were submitted on 2026-09-23 (`scripts/della/login_cells_k8192_s20.sh`;
-   jobs 14330258 and 14330259). `C32k_bs32s60` (60 steps of 32 sequences) is running.
+3. Plain controls for the 60- and 150-step runs were submitted on 2026-09-23 (jobs 14330258
+   and 14330259). `C32k_bs32s60` (60 steps of 32 sequences) is running.
+
+### The 2x2 at window 8192, 20 steps
+
+Both 20-step weight sets evaluated with TTT on and off (`scripts/della/login_cells_k8192_s20.sh`);
+the loaded weights reproduced the training jobs' own numbers (2.5957 against 2.5958; 2.6139).
+
+| slow weights | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop | 2.5957 | 2.6133 |
+| plain fine-tune | 2.6040 | 2.6139 |
+
+| effect, per book (22 books) | 10 steps (from "The 2x2 behind H1") | 20 steps | 95% CI at 20 steps | books positive |
+|---|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0179 | +0.0142 | [+0.0080, +0.0205] | 22/22 |
+| TTT at eval, plain fine-tuned weights | +0.0164 | +0.0084 | [+0.0047, +0.0121] | 21/22 |
+| training with TTT, evaluated with TTT | +0.0247 | +0.0104 | [+0.0059, +0.0149] | 21/22 |
+| training with TTT, evaluated without | +0.0232 | +0.0045 | [-0.0028, +0.0119] | 21/22 |
+| INTERACTION | +0.0015 | +0.0058 | [+0.0028, +0.0089] | 22/22 |
+
+At the reference window the interaction grew from 10 to 20 steps (+0.0015 to +0.0058) while
+every other effect shrank, and it is now positive in all 22 books. The training effect with
+TTT off has fallen to +0.0045 and is no longer clearly different from zero: the head start on
+window repair that training through the inner loop gave at 10 steps is gone by 20. What TTT
+is worth on the plain fine-tuned weights halved (+0.0164 to +0.0084); on the meta-trained
+weights it fell less (+0.0179 to +0.0142). The 60- and 150-step 2x2 follow when their
+controls finish.
 
 ### Where Muon breaks, and training at 2e-5
 
