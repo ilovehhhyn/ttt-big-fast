@@ -85,8 +85,9 @@ the `arora` copies (14237614 to 14237617, 14237645 to 14237648) were cancelled f
 | 14330765, 14330766 | `Ck1024_match`: window 1024, `truncate_bptt=4`, same budget | 4 H100s, 24 h | the reference budget where the ceiling is larger |
 | 14330767, 14330768 | `Ck1024_match_ctl` | 4 H100s, 16 h | its control |
 | 14169729 | `C32k_bs32s60`: 60 steps of 32 sequences (63M tokens), running since 2026-09-23 09:55 | 1 GPU, 22 h | closest single-GPU approach to the reference regime |
-| 14330258, 14330259 | `C32k_ctl60` (2 GPUs), `C32k_ctl150` (4 GPUs): `--inner none` controls for the 60- and 150-step runs | `gpu-test`, 1 h | the 2x2 at 60 and 150 steps |
-| 14330856, 14330857 | `muonval_t4`, `muonval_t2`: 6 steps of arm C through Muon at 1.2e-4 (5 steps also rounds the 10% warmup to zero) | `gpu-test`, 1 h | memory and speed of meta-training through Muon |
+| 14330259 | `C32k_ctl150` (4 GPUs): `--inner none` control for the 150-step run (`C32k_ctl60` finished: 2.5255) | `gpu-test`, 1 h | the 2x2 at 150 steps |
+| 14333213 to 14333217 | `C_32k_k1024_muon_s40`: 40 steps of arm C through Muon at 1.2e-4, window 1024, truncation 4, `--eval-ttt-off`; chain of five 1-hour links | `gpu-test` | THE next experiment; its 2x2 partner is the existing `C_32k_k1024_ctl_s40` |
+| login GPU | `scripts/della/login_cells_k8192_s60_s150.sh`: plain 60- and 150-step weights with TTT on and off (waits for `C32k_ctl150`) | 2 x 13 min | the 2x2 at 60 and 150 steps, window 8192 |
 
 All of these use the ORIGINAL write rule (normalized SGD at 4e-6). They test the thesis at the
 reference budget with the weak memory. Keep them; add a Muon run at that budget once Muon
@@ -113,12 +114,11 @@ Read a job with `grep -E '^\[eval\]|^ttt_on|step' /scratch/gpfs/ARORA/hh9077/log
 Meta-train the LoRA through Muon. It separates the two explanations for the small interaction:
 either H1 is wrong, or the write was too weak for the slow weights to have anything to shape.
 
-1. If `muonval_t4` (job 14330856) fit and took under 300 s per step: submit 40 steps of arm C with
-   `--inner muon --inner-lr 1.2e-4`, `--eval-ttt-off`, and the `--inner none` control (the
-   existing `C_32k_k1024_ctl_s40` control was trained with the same outer settings and can be
-   reused: its weights do not depend on the inner rule). Use a chain of 1-hour `gpu-test`
-   links (`scripts/della/submit_chain.sh` with `SBATCH_EXTRA="--qos=gpu-test"`) if one link is
-   not enough; sizes come from the validation job's `sec_per_step`.
+1. Done on 2026-09-23 17:45: the validation fit (286 s per step, peak 60.4 GiB at truncation
+   4), and the 40-step run `C_32k_k1024_muon_s40` was submitted as a chain of five 1-hour
+   `gpu-test` links (jobs 14333213 to 14333217). Its control is the existing
+   `C_32k_k1024_ctl_s40` (same outer settings; a plain fine-tune does not depend on the inner
+   rule). Expected to finish the same night.
 2. Score both sets of weights with Muon at 1.2e-4: recall (`scripts/recall_probe.py`,
    `--gap 17408 --pairs 32`) and the 2x2 (`scripts/two_by_two.py`).
 3. Prediction, written 2026-09-23 before the run: loss at or below 2.6777 with TTT on; recall

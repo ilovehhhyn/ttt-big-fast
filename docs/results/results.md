@@ -1420,5 +1420,21 @@ recall from +0.3880 to +0.5201 and lowers the loss from 2.8318 to 2.7243 (TTT of
 but the loss stays 0.047 above the weights trained at 4e-6. The first validation of
 meta-training THROUGH Muon (jobs 14247911, 14247912) failed before training: `--steps 3` with
 the 10% warmup rounds to a 0-step warmup, which is a hard error by design. Resubmitted with
-`--steps 5` (jobs 14330212, 14330213).
+`--steps 5` (jobs 14330212, 14330213), which fails the same way (Python rounds 0.5 to 0; the
+message had named the wrong fix, now corrected), then with `--steps 6`.
+
+### Meta-training through Muon fits, and its cost
+
+Job 14330856 (window 1024, `truncate_bptt=4`, Muon at 1.2e-4, 6 steps of 4 sequences, A100):
+286 s per step, peak 60.4 GiB; loss 5.0223 at step 0 and 3.3282 at step 5; evaluation on 4
+sequences 3.2628 (TTT off 3.3774). At `truncate_bptt=2` (job 14330857): 250 s per step. For
+comparison normalized SGD takes 55 s per step at truncation 4, so the second-order pass through
+the Newton-Schulz iteration costs about 5x. The 40-step run was submitted as a chain of five
+1-hour `gpu-test` links (jobs 14333213 to 14333217) with the existing plain control
+`C_32k_k1024_ctl_s40` as its 2x2 partner.
+
+The 60-step plain control at window 8192 (`C32k_ctl60`, job 14330258, 2 GPUs, 37 minutes):
+2.5255, against 2.5146 (TTT on) and 2.5294 (TTT off) for the weights trained through the inner
+loop (`C32k_s60`). Its evaluation with TTT on, and the same for the 150-step pair, run from
+`scripts/della/login_cells_k8192_s60_s150.sh`.
 

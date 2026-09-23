@@ -131,6 +131,9 @@ the strongest direction carries 32 to 60% of the key energy and 64 directions ca
 
 ## Pending numbers
 
-Muon meta-training memory and speed (jobs 14330856, 14330857); the 60- and 150-step plain controls (14330258, 14330259);
-`C32k_bs32s60` (14169729, running); the matched-budget chains in `plan.md`.
+The 40-step meta-training through Muon (jobs 14333213 to 14333217); the 150-step plain control
+(14330259) and the 60- and 150-step 2x2 at window 8192; `C32k_bs32s60` (14169729, running); the
+matched-budget chains on PLI in `plan.md`. Measured today: meta-training through Muon fits
+(286 s per step, peak 60.4 GiB, window 1024, truncation 4); the 60-step plain control at window
+8192 scores 2.5255.
 
