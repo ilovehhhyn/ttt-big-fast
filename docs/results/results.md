@@ -1340,3 +1340,60 @@ that resumes from the checkpoint or exits at once:
 
 The single-GPU runs queued on 2026-09-20 (`C32k_t1`, `C32k_t2`, `C32k_ctl20`, `C32k_bs8`,
 `C32k_bs16`, `C32k_bs32`, `C32k_s60`, `C32k_s150`, `C32k_bs32s60`) are still pending.
+
+## 2026-09-23: the window-8192 ladder, and two more write-rule numbers
+
+### Longer training and larger batches at the reference window
+
+The single-GPU jobs queued on 2026-09-20 ran on 2026-09-23. PG-19, T = 32768, window 8192,
+normalized SGD 4e-6, outer lr 4e-4, LoRA r = 64, `truncate_bptt=2` unless noted, evaluated on
+the standard 32 sequences (22 books). "TTT off" is the same trained weights with the inner loop
+switched off; the per-book column is that difference clustered by book.
+
+| run | steps | sequences per step | tokens | loss, TTT on | TTT off | TTT on - off per book | 95% CI | books positive |
+|---|---|---|---|---|---|---|---|---|
+| `C32k_t2` | 20 | 4 | 2.6M | 2.5958 | not evaluated | | | |
+| `C32k_t1` (`truncate_bptt=1`) | 20 | 4 | 2.6M | 2.5966 | not evaluated | | | |
+| `C32k_ctl20` (plain fine-tune, `--inner-lr 0`) | 20 | 4 | 2.6M | 2.6139 | | | | |
+| `C32k_bs8` | 20 | 8 | 5.2M | 2.5799 | 2.5943 | | | |
+| `C32k_bs16` | 20 | 16 | 10.5M | 2.5738 | 2.5909 | | | |
+| `C32k_bs32` | 20 | 32 | 21.0M | 2.5664 | 2.5777 | +0.0091 | [+0.0047, +0.0134] | 22/22 |
+| `C32k_s60` | 60 | 4 | 7.9M | 2.5146 | 2.5294 | +0.0125 | [+0.0082, +0.0167] | 22/22 |
+| `C32k_s150` | 150 | 4 | 19.7M | 2.4664 | 2.4756 | +0.0067 | [+0.0025, +0.0110] | 21/22 |
+
+Paired comparisons (`scripts/paired_ttt_effect.py --baseline`):
+
+- Trained through the inner loop against plain fine-tuning at 20 steps (`C32k_t2` against
+  `C32k_ctl20`): +0.0186 per book [+0.0146, +0.0226], 21 of 22. Inside the window the plain
+  fine-tune is better (-0.0115); in the last 8192 tokens the meta-trained model is better
+  (+0.0338).
+- Truncating the meta-gradient to 1 chunk instead of 2 changes nothing at 20 steps: -0.0004
+  per book [-0.0014, +0.0006], 11 of 22.
+
+1. What TTT adds on the same weights shrinks as training goes on: +0.0248 (8 steps, from
+   "Same weights, inner loop on and off"), +0.0125 (60 steps), +0.0067 (150 steps). The
+   ceiling at this window is +0.0208. At 150 steps the model is still 0.14 nats above the
+   healthy windowed level (about 2.33), so the repair is not finished either.
+2. At equal tokens, more steps beat a larger batch: 150 steps of 4 sequences (19.7M tokens)
+   reach 2.4664; 20 steps of 32 sequences (21.0M tokens) reach 2.5664.
+3. The 20-step 2x2 (both sets of weights evaluated on and off) and plain controls for the 60-
+   and 150-step runs were submitted on 2026-09-23 (`scripts/della/login_cells_k8192_s20.sh`;
+   jobs 14330258 and 14330259). `C32k_bs32s60` (60 steps of 32 sequences) is running.
+
+### Where Muon breaks, and training at 2e-5
+
+Same recall test and sequences as "Two write rules that equalize the update".
+
+| weights | inner rule, rate | recall | 95% CI | loss |
+|---|---|---|---|---|
+| 40 steps at 4e-6, tested at | Muon 2.4e-4 | +1.5005 | [+1.3894, +1.6117] | 2.7937 |
+| 40 steps TRAINED at normalized SGD 2e-5, tested at 2e-5 | normalized SGD 2e-5 | +0.5201 | [+0.4733, +0.5669] | 2.7243 |
+
+Muon at 2.4e-4 (60 times the old step) is still stable and recalls 56% of full attention, at a
+loss 0.116 above the 4e-6 value. Training at 2e-5 (rather than only testing at it) raises
+recall from +0.3880 to +0.5201 and lowers the loss from 2.8318 to 2.7243 (TTT off: 2.7847),
+but the loss stays 0.047 above the weights trained at 4e-6. The first validation of
+meta-training THROUGH Muon (jobs 14247911, 14247912) failed before training: `--steps 3` with
+the 10% warmup rounds to a 0-step warmup, which is a hard error by design. Resubmitted with
+`--steps 5` (jobs 14330212, 14330213).
+
