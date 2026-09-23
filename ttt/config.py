@@ -187,6 +187,19 @@ class OuterConfig:
         resolve_warmup(self.warmup_frac, self.total_steps, "warmup_frac")
 
 
+def smallest_steps_with_warmup(frac: float) -> int:
+    """The smallest total_steps whose warmup round(frac * total_steps) is at least 1.
+
+    Python rounds halves to even, so round(0.5) is 0: the first n with frac * n > 0.5 is
+    the answer, not ceil(0.5 / frac) (5 for frac = 0.1, whose warmup rounds to 0).
+    """
+    assert 0.0 < frac < 1.0, f"frac must be in (0, 1), got {frac}"
+    steps = math.ceil(0.5 / frac)
+    while round(frac * steps) < 1:
+        steps += 1
+    return steps
+
+
 def resolve_warmup(frac: float, total_steps: int, name: str) -> int:
     """Warmup length in STEPS, or a hard error if the configuration cannot deliver one.
 
@@ -205,7 +218,7 @@ def resolve_warmup(frac: float, total_steps: int, name: str) -> int:
     warmup = round(frac * total_steps)
     assert warmup >= 1, (
         f"{name}={frac} over total_steps={total_steps} rounds to a 0-step warmup. "
-        f"Use total_steps >= {math.ceil(0.5 / frac)}, or set {name}=0 to disable warmup "
+        f"Use total_steps >= {smallest_steps_with_warmup(frac)}, or set {name}=0 to disable warmup "
         f"on purpose."
     )
     assert warmup < total_steps, (

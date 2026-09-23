@@ -254,6 +254,30 @@ def test_zero_length_warmup_is_an_error_not_a_silent_skip():
                                                  lr_warmup_frac=0.0), 3) == 1.0
     # And a step count that CAN carry the warmup still behaves as before.
     assert resolve_warmup(0.1, 20, "warmup_frac") == 2
+
+
+def test_the_suggested_step_count_in_the_warmup_error_really_carries_a_warmup():
+    """The message names the fix, so the fix must work: the smallest count it suggests
+    must round to a warmup of at least one step, and one fewer must not.
+
+    Witness: with frac = 0.1, ceil(0.5 / 0.1) = 5 steps rounds to round(0.5) = 0 under
+    Python's round-half-to-even; two validation jobs were submitted on that advice and
+    failed at construction (2026-09-23).
+    """
+    import re
+
+    from ttt.config import smallest_steps_with_warmup
+    from ttt.optim.outer import resolve_warmup
+
+    for frac in (0.1, 0.05, 0.3, 0.125, 0.01):
+        suggested = smallest_steps_with_warmup(frac)
+        assert resolve_warmup(frac, suggested, "warmup_frac") >= 1, frac
+        assert round(frac * (suggested - 1)) == 0, (frac, suggested)
+        with pytest.raises(AssertionError) as error:
+            resolve_warmup(frac, suggested - 1, "warmup_frac")
+        named = int(re.search(r"total_steps >= (\d+)", str(error.value)).group(1))
+        assert named == suggested, (frac, named, suggested)
+    assert smallest_steps_with_warmup(0.1) == 6
     assert lr_at_step(0, OuterConfig(lr=4e-4, total_steps=20)) == 0.0
     assert inner_lr_scale_at_step(0, InnerConfig(optimizer="normalized_sgd", lr_rms=1e-3), 20) == 0.1
 
