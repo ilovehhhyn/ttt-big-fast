@@ -145,6 +145,13 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    over plain fine-tuning under the same write) and not the MEMORY (recall -0.0235). The
    next test of H1 is therefore a memory test that the slow weights can influence: the
    per-token rates (built) and arm F, scored by recall, not by loss alone.
+7. Submitted 2026-09-24 02:25 on `gpu-test`: Muon 4.8e-4 with and without `row_reset`
+   (jobs 14356889, 14356890; prediction in R, "Row reset at 1.2e-4"); 6-step validations of
+   `--token-rates` (14356891) and `--arm F --prime-intermediate 2048` (14356892), both arm C
+   settings at window 1024, normalized SGD 4e-6, 4 evaluation sequences. Predictions: the
+   token-rate run matches the plain 6-step run's step-0 loss exactly (eta = 1 at init) and
+   costs under 10% more time; arm F fits under 40 GiB (fast set 50M) and its gate leaves 0
+   within 6 steps; its inner rate needs its own sweep before any longer run.
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 

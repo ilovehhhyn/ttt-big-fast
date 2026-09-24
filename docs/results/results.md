@@ -1549,3 +1549,30 @@ Every window's backward left d loss / d W_0 on the live fast parameters, which n
 or zeroed: 201M floats, 0.8 GiB, resident for the whole run in every arm C job so far
 (commit d6dabb6 drops it after each sequence unless the fast init is trained). Numerics are
 unchanged; the saving is not yet measured on the cluster.
+
+### bf16 Newton-Schulz: same numbers, 2 to 4 times faster
+
+The 40-step weights trained through normalized SGD (`C_32k_k1024_t4_s40`), Muon at 1.2e-4,
+`--ns-dtype bfloat16` against the float32 rounds, same 32 pairs and 32 sequences (jobs 14354268
+and 14353810, both A100). Prediction written before: recall within 0.02 of +1.0241, evaluation
+under 8 s per sequence.
+
+| Newton-Schulz dtype | recall | 95% CI | recall test, seconds | loss, TTT on | TTT off | 32-sequence loss run |
+|---|---|---|---|---|---|---|
+| float32 | +1.0241 | [+0.9555, +1.0927] | 1277 | 2.6895 | 2.7086 | 671 s |
+| bfloat16 | +1.0239 | [+0.9554, +1.0924] | 329 | 2.6895 | 2.7086 | 336 s |
+
+Paired per book, bf16 minus fp32 recall: -0.0003 [-0.0007, +0.0002], 7 of 20 books. The loss
+agrees to four decimals. The recall test runs 3.9 times faster and the loss evaluation 2.0
+times (10.5 s per sequence, not the predicted 8). Adopted: every Muon evaluation from here
+passes `--ns-dtype bfloat16`; the meta-training step time under bf16 is not yet measured.
+
+### Row reset at 1.2e-4: no change, as a small step predicts
+
+Same weights, Muon 1.2e-4 in float32, `--weight-norm row_reset` (job 14354269): recall
++1.0236 [+0.9550, +1.0921]; paired against the plain rows, -0.0006 [-0.0010, -0.0002], 4 of
+20 books. A step of per-element RMS 1.2e-4 over 32 chunks barely changes a row's norm, so the
+reset has nothing to undo. Its purpose is a larger stable step. Prediction, written before
+jobs 14356889 (plain rows) and 14356890 (row reset) at Muon 4.8e-4 (both bf16): without the reset the loss rises above 2.9 or the
+run becomes unstable; with the reset the loss stays under 2.85 and recall exceeds +1.5005
+(the 2.4e-4 value).
