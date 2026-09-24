@@ -16,8 +16,8 @@ failed=0
 for spec in 'cell_plainft_60|C_32k_ctl60|C_32k_s60' 'cell_plainft_150|C_32k_ctl150|C_32k_s150'; do
   IFS='|' read -r name ckpt meta <<< "$spec"
   [ -e $RES/$name.json ] && { echo "[skip] $name"; continue; }
-  for i in $(seq 1 480); do [ -e $RES/$ckpt.json ] && break; sleep 30; done   # up to 4 h for the control to finish
-  [ -e $RES/$ckpt.ckpt ] && [ -e $RES/$ckpt.json ] || { echo "[FAIL]  $name: $ckpt did not finish within 4 hours"; failed=1; continue; }
+  for i in $(seq 1 2880); do [ -e $RES/$ckpt.json ] && break; sleep 30; done   # up to 24 h for the control to finish (it queued for a night once)
+  [ -e $RES/$ckpt.ckpt ] && [ -e $RES/$ckpt.json ] || { echo "[FAIL]  $name: $ckpt did not finish within 24 hours"; failed=1; continue; }
   while pgrep -u hh9077 -f 'login_recall_|login_sp_|login_cell_|login_cv_' > /dev/null; do sleep 20; done
   echo "[start] $name $(date +%H:%M:%S)"; t0=$SECONDS
   timeout -s KILL 780 .venv/bin/python -u -m ttt.run $COMMON --load-slow $RES/$ckpt.ckpt --out $RES/$name.json > $LOGS/login_$name.log 2>&1; rc=$?

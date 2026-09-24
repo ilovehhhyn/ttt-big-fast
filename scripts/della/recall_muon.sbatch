@@ -12,6 +12,8 @@
 # Does an orthogonalised update (Muon: the gradient's singular values are all set to 1) store more
 # than normalized SGD at the same cost in loss? Un-tuned model, PG-19, 32K tokens, window 1024.
 #   sbatch scripts/della/recall_muon.sbatch <inner-lr> [checkpoint]
+# Optional environment: EXTRA_ARGS adds flags to both runs (for example --ns-dtype bfloat16 or
+# --weight-norm row_reset) and TAG is appended to both result names so the variant has its own file.
 # Without a checkpoint the un-tuned model is scored. With one (a result name, for example
 # C_32k_k1024_t4_s40) its trained slow weights are loaded and only the inner rule changes.
 # Measured on an A100 (jobs 14244957, 14244958): 20 s per sequence pass with Muon, so 32 pairs
@@ -20,6 +22,9 @@
 set -uo pipefail
 LR=${1:?usage: recall_muon.sbatch <inner-lr> [checkpoint]}
 CKPT=${2:-}
+EXTRA_ARGS=${EXTRA_ARGS:-}
+TAG=${TAG:-}
+[ -z "$EXTRA_ARGS" ] || [ -n "$TAG" ] || { echo "EXTRA_ARGS set without TAG: the variant would overwrite the plain result's name"; exit 2; }
 ROOT=/scratch/gpfs/ARORA/hh9077/ttt-big-fast; RES=/scratch/gpfs/ARORA/hh9077/results; DATA=/scratch/gpfs/ARORA/hh9077/data/pg19_32k
 export HF_HOME=/scratch/gpfs/ARORA/hh9077/hf HF_HUB_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True PYTHONPATH="$ROOT"
@@ -33,8 +38,9 @@ else
   ARM="--arm C --lora-rank 64 --load-slow $RES/$CKPT.ckpt"
   RECALL_NAME="recall_pg19_k1024_${CKPT}_muon_lr$LR"; LOSS_NAME="${CKPT}_muon_evallr$LR"
 fi
+RECALL_NAME="$RECALL_NAME$TAG"; LOSS_NAME="$LOSS_NAME$TAG"
 MODEL="$ARM --mode eval --data $DATA --seq-len 32768 --chunk 1024 --window 1024 --prefix-segment 1024 --fast-blocks 4
-       --remat-group 1 --remat-blocks --dtype bf16 --inner muon --inner-lr $LR"
+       --remat-group 1 --remat-blocks --dtype bf16 --inner muon --inner-lr $LR $EXTRA_ARGS"
 run() {   # run <result name> <script and its arguments...>
   local name=$1; shift
   [ -e "$RES/$name.json" ] && { echo "[skip] $name"; return; }
