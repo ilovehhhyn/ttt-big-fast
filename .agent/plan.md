@@ -127,18 +127,37 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    the interaction near +0.0083, meta-learning adds nothing to a strong fixed write rule, and
    the thesis is not supported at this scale.
 
-## Planned after that, in order
+## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 
-1. Speed up Muon's Newton-Schulz iteration (bf16 or TF32; measured 20 s per sequence pass
-   against 3.4 on an A100). Confirm the recall numbers do not change.
-2. Make the preconditioner a slow weight (a low-rank matrix per fast layer that reshapes the
-   keys before each write) and meta-learn it. This is the "LoRA weights the fast update" idea.
-3. Two Muon steps per chunk (evaluation only first): the sub-agents measured 2x recall in a
-   small model. Second-order memory grows with the number of steps.
-4. A reasoning form of the recall test (facts stated early, a question much later whose answer
-   is not in the text). Copying is the necessary first step; nothing is built yet.
-5. Arm D's outer-rate sweep at `truncate_bptt=1`; arm F; the forgetting probe on Llama; seeds;
-   bring `docs/preprint/main.tex` up to date (it still describes the JAX plan).
+LaCT is "Test-Time Training Done Right" (arXiv 2505.23884). A sub-agent read the full PDF on
+2026-09-23 and compared it with this project row by row; Helen chose these five items.
+
+1. A chunk of 2048 tokens (LaCT App. C.2: 2048 for its 760M model, 4096 for 3B). The window
+   must stay at or above the chunk, so this arm runs at window 2048 or larger, where old
+   context is worth +0.0667 on PG-19 (not +0.0992 at window 1024). It is also the principled
+   fix for Muon's cost: five Newton-Schulz iterations cost about 30 x hd x state FLOPs (LaCT
+   App. A, Eq. 17 and 18), so Muon is cheaper than the token computation only when the chunk
+   exceeds (5/3) hd tokens, about 3400 for our 2048 x 8192 matrices. At chunk 1024 that is
+   the measured 20 s per sequence against 3.4. Needs a memory probe and its own plain control.
+2. Arm F (a small extra fast MLP, the paper's layout) built with LaCT's RMSNorm on the fast
+   output followed by a zero-initialised gate (LaCT Alg. 2, App. C.3), so the new memory
+   leaves the pretrained model untouched at step 0. `--arm F` keeps refusing until it is real.
+3. Per-token learning rates as a slow parameter: eta_t = softplus(Linear(x_t) + bias), one
+   small linear layer per fast block, meta-learned through the inner loop (LaCT Eq. 4,
+   Alg. 1 and 2). Under a normalized or Muon rule they only weight tokens against each other
+   inside a chunk (LaCT Sec. 3.2). This is the cheaper form of "the LoRA weights the fast
+   update" (the meta-learned preconditioner below).
+4. L2 row normalization of the fast weights after each inner step, no weight decay (LaCT
+   Alg. 1 and 3, Sec. 3.2: each row of W - g is rescaled to the row norm of W). Test first at
+   evaluation time on the existing 40-step weights with the recall test. The hope is a larger
+   stable inner rate, which caps every memory result so far.
+5. Deferred: the bf16 Newton-Schulz iteration. On a 2048 x 8192 matrix it differs from the
+   fp32 iteration by 1.9% in relative Frobenius norm (singular values [0.673, 1.137] against
+   [0.682, 1.134]). The speed gain is not measured. Measure both before deciding.
+6. Then: the meta-learned preconditioner as a slow weight; two Muon steps per chunk
+   (evaluation only first; measure second-order memory with `scripts/memory_probe.py`); a
+   reasoning form of the recall test; arm D's outer-rate sweep at `truncate_bptt=1`; the
+   forgetting probe on Llama; seeds; bring `docs/preprint/main.tex` up to date.
 
 Not planned: a KV cache beyond the window. It would answer the recall test on its own and make
 the method a hybrid; it is kept only as a possible baseline (`literature.md`, "Cache hybrids").
