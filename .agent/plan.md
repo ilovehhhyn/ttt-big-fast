@@ -165,6 +165,16 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    at window 8192 could not be placed as a 4-GPU `gpu-test` job in 13 hours; cancelled and
    resubmitted as a 2-GPU, 2-link chain under the same name (14360407, 14360408); the
    login script for its 2x2 is still waiting for it.
+10. Read 2026-09-24 06:40: at 2.4e-4 both predictions held (loss 2.7452, recall +1.4570,
+   54% of full attention). Training through the strong write pays back its loss cost (plain
+   weights under the same write: 2.8106; weights trained through the weak write: 2.7937) and
+   again lowers verbatim recall a little (-0.04, 3 to 4 of 20 books). The H1 number to quote
+   is "training with TTT, evaluated with TTT": +0.0628 [+0.0578, +0.0678], 22/22 (R,
+   "Meta-training through Muon at 2.4e-4"). Decision: the method's operating point moves to
+   Muon with meta-training at the same rate; the rate itself is a loss-memory dial (table
+   "Loss against recall so far"). The matched-budget PLI chains still use normalized SGD 4e-6
+   and start today; whether to replace them with Muon 2.4e-4 in bf16 (78 s per step at 4
+   sequences, so about 5x the reference's per-step cost of the control) is Helen's call.
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 

@@ -63,3 +63,10 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   3.06. Token rates: no loss change in 40 steps. Arm F: zero gate never opens; gate init flag
   added. Literature read on how the field measures (loss first, needles second). Chain
   through Muon 2.4e-4 submitted.
+  05:00 to 06:40: bs32_s60 (60 x 32) equals s150 (150 x 4) at three times the tokens. Arm F
+  with gates at 0.1 uses its write (+0.0130) but trails arm C by 0.040. Token-rate recall a
+  null. Chain through Muon 2.4e-4 (bf16): loss 2.7452, recall +1.4570; both predictions met;
+  the strong write hurts plain weights (-0.0905) and helps weights trained through it. The
+  150-step control resubmitted as a 2-GPU chain (link 1 reached step 107, link 2 resumed).
+  A stale inline launcher blocked the login GPU queue for an hour; killed; login scripts now
+  wait on GPU processes and live in files.
