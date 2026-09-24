@@ -1790,3 +1790,36 @@ Loss against recall so far, all on the same 32 sequences and passages (window 10
 | Muon 2.4e-4 | trained through it | 2.7452 | +1.4570 | 54% |
 | Muon 4.8e-4 | trained through normalized SGD 4e-6 | 3.0559 | +1.9159 | 71% |
 | full attention, no TTT | un-tuned | 2.3092 | +2.6920 | 100% |
+
+### The 2x2 at window 8192, 150 steps: everything but the interaction is inside the noise
+
+The 150-step plain control (`C_32k_ctl150`) ran as a 2-GPU, 2-link `gpu-test` chain after a
+4-GPU request went unplaced for 13 hours (jobs 14360407, 14360408; 36 s per step; its own
+loss 2.4702). It was submitted under the name `C32k_ctl150` and renamed to the name the
+waiting script expected; no number depends on the name. The plain weights were then scored
+with TTT on and off on the login GPU (`cell_plainft_150`); the TTT-off evaluation reproduced
+2.4701 against the control's 2.4702. Prediction on record: interaction between +0.005 and
++0.010, TTT on the plain weights below +0.005.
+
+| slow weights, 150 x 4 sequences | TTT on at eval | TTT off at eval |
+|---|---|---|
+| trained through the inner loop (`C32k_s150`) | 2.4664 | 2.4756 |
+| plain fine-tune (`C_32k_ctl150`) | 2.4652 | 2.4701 |
+
+| effect, per book (22 books) | 10 steps | 20 steps | 60 steps | 150 steps | 95% CI at 150 | books |
+|---|---|---|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0179 | +0.0142 | +0.0125 | +0.0067 | [+0.0025, +0.0110] | 21/22 |
+| TTT at eval, plain fine-tuned weights | +0.0164 | +0.0084 | +0.0048 | +0.0029 | [-0.0008, +0.0066] | 15/22 |
+| training with TTT, evaluated with TTT | +0.0247 | +0.0104 | +0.0053 | +0.0008 | [-0.0032, +0.0048] | 20/22 |
+| training with TTT, evaluated without | +0.0232 | +0.0045 | -0.0024 | -0.0030 | [-0.0076, +0.0016] | 7/22 |
+| INTERACTION | +0.0015 | +0.0058 | +0.0077 | +0.0038 | [+0.0032, +0.0045] | 22/22 |
+
+1. The interaction prediction failed on the low side: +0.0038, down from +0.0077 at 60 steps,
+   though still positive in all 22 books with a tight interval. The second prediction held
+   (+0.0029 on the plain weights).
+2. By 150 steps at the reference window every other effect is within the noise: training
+   through the inner loop no longer beats plain fine-tuning with the write on (+0.0008), and
+   the write itself is worth +0.0067 on the meta-trained weights and +0.0029 on the plain
+   ones, both under the +0.0208 ceiling for old context at this window. At window 8192 with
+   the weak write, the LoRA repairs the window on its own and leaves the write almost
+   nothing to add. This is the regime the matched-budget PLI chains were queued in.

@@ -70,3 +70,6 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   150-step control resubmitted as a 2-GPU chain (link 1 reached step 107, link 2 resumed).
   A stale inline launcher blocked the login GPU queue for an hour; killed; login scripts now
   wait on GPU processes and live in files.
+  08:40: the 150-step 2x2 at window 8192: interaction +0.0038 (from +0.0077 at 60), every
+  other effect inside the noise. The 150-step control ran as a 2-GPU chain; I named it
+  without the underscore the waiting script expected and renamed the files.

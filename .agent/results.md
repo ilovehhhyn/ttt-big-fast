@@ -47,6 +47,7 @@ context is worth most".
 | window 8192, 10 steps | 2.6688 / 2.6888 | 2.6944 / 2.7124 | +0.0015 | [+0.0005, +0.0026] | 17/22 | "The 2x2 behind H1" |
 | window 8192, 20 steps | 2.5957 / 2.6133 | 2.6040 / 2.6139 | +0.0058 | [+0.0028, +0.0089] | 22/22 | "The 2x2 at window 8192, 20 steps" |
 | window 8192, 60 steps | 2.5146 / 2.5294 | 2.5187 / 2.5255 | +0.0077 | [+0.0058, +0.0096] | 21/22 | "The 2x2 at window 8192, 60 steps" |
+| window 8192, 150 steps | 2.4664 / 2.4756 | 2.4652 / 2.4701 | +0.0038 | [+0.0032, +0.0045] | 22/22 | "The 2x2 at window 8192, 150 steps"; every other effect inside the noise |
 | window 1024, 10 steps | 2.9440 / 3.0041 | 3.0212 / 3.0682 | +0.0126 | [+0.0098, +0.0153] | 22/22 | "Arm C at k = 1024, 10 steps" |
 | window 1024, 40 steps | 2.6777 / 2.7086 | 2.6979 / 2.7196 | +0.0083 | [+0.0062, +0.0104] | 22/22 | "Arm C at k = 1024, 40 steps" |
 | window 1024, 40 steps, Muon 1.2e-4 in training AND evaluation | 2.6762 / 2.7380 | 2.7079 / 2.7196 | +0.0492 | [+0.0457, +0.0527] | 22/22 | "The 2x2 under Muon"; mostly dependence: meta minus plain is +0.0291 with TTT on and -0.0201 with it off |
