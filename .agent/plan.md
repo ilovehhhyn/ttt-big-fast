@@ -126,6 +126,14 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    at or above +1.0241; interaction at least twice +0.0083. If recall stays near +1.0241 and
    the interaction near +0.0083, meta-learning adds nothing to a strong fixed write rule, and
    the thesis is not supported at this scale.
+4. Read 2026-09-24 00:59: the run finished (job chain 14333213 to 14333217; 301 s per step,
+   peak 60.7 GiB). Loss 2.6762 with TTT on (prediction met, by 0.0015), 2.7380 with TTT off,
+   so TTT is worth +0.0618 on these weights against +0.0309 on the weights trained through
+   normalized SGD. Learned step multipliers ended at 0.995 (min 0.994, max 0.996). Pending:
+   the plain control scored with Muon (login GPU), the recall of both weight sets (jobs
+   14353810, 14353811). Predictions written before those land: interaction +0.02 to +0.04
+   per book; recall of the Muon-trained weights +1.1 to +1.4; recall of the plain weights
+   near +1.0 (the earlier +1.0241 was on weights trained through normalized SGD, not plain).
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 
