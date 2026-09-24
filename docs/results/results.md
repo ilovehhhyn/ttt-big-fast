@@ -1688,3 +1688,32 @@ books in favour of the larger batch (one book carries the wide interval); agains
 150 steps of 4: at this stage the number of outer steps matters, not the number of tokens, and
 what TTT adds on the same weights stays at +0.006 to +0.007, under the +0.0208 ceiling. It has
 no plain control of its own.
+
+### Arm F with the gates at 0.1: the prime MLP now speaks, and the arm trails arm C
+
+`F_32k_k1024_g01_s40` and its `--inner none` control (jobs 14359082, 14359083; `--prime-gate-init
+0.1`, otherwise as the zero-gate pair). Predictions on record: the prime W_0 moves, TTT effect
+above +0.005, loss within 0.01 of arm C's plain level (2.6979).
+
+| arm F, gates start at 0.1, 40 steps | TTT on | TTT off | gate mean at step 39 | step-0 loss |
+|---|---|---|---|---|
+| trained through the inner loop | 2.7239 | 2.7385 | 0.0922 | 5.4315 |
+| plain (`--inner none`) | pending (login GPU) | 2.7619 | 0.0921 | 5.5243 |
+
+Paired per book: TTT on against off +0.0130 [+0.0097, +0.0164], 22/22 (against +0.0013 with
+the zero gate); against its control with the write off, +0.0345 [+0.0277, +0.0412], 22/22;
+against arm C trained through the inner loop (`C_32k_k1024_t4_s40`, 2.6777), -0.0398
+[-0.0520, -0.0276], 0 of 22 books. Two of the three predictions held; the loss prediction
+failed by 0.026. The gates drifted DOWN from 0.100 to 0.092 in both runs: the outer loop
+prefers less of the prime MLP, whose random init raises the step-0 loss from 5.07 (arm C) to
+5.43. Forty steps are not enough for a 50M-parameter random MLP to earn its place next to a
+pretrained one; the 2x2 (plain control scored with the write on) follows.
+
+### Recall of the token-rate weights
+
+`C_32k_k1024_tokrates_s40` under Muon 1.2e-4 in bf16 with the rates on (job 14359038): recall
++1.0067 [+0.9398, +1.0735], loss 2.6891; paired against the plain 40-step weights under the
+same write, -0.0172 [-0.0202, -0.0142], 0 of 20 books. Rates learned under normalized SGD at
+4e-6 do not help a Muon write and slightly hurt it. Together with the unchanged loss: at this
+budget and rate the per-token weighting is a null result. Not tested: rates learned THROUGH
+Muon, where the weighting is the only thing the rule leaves free.
