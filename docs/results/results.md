@@ -1571,7 +1571,7 @@ passes `--ns-dtype bfloat16`; the meta-training step time under bf16 is not yet 
 
 Same weights, Muon 1.2e-4 in float32, `--weight-norm row_reset` (job 14354269): recall
 +1.0236 [+0.9550, +1.0921]; paired against the plain rows, -0.0006 [-0.0010, -0.0002], 4 of
-20 books. A step of per-element RMS 1.2e-4 over 32 chunks barely changes a row's norm, so the
+20 books; loss 2.6893 with TTT on (2.6895 without the reset), 2.7086 off. A step of per-element RMS 1.2e-4 over 32 chunks barely changes a row's norm, so the
 reset has nothing to undo. Its purpose is a larger stable step. Prediction, written before
 jobs 14356889 (plain rows) and 14356890 (row reset) at Muon 4.8e-4 (both bf16): without the reset the loss rises above 2.9 or the
 run becomes unstable; with the reset the loss stays under 2.85 and recall exceeds +1.5005
