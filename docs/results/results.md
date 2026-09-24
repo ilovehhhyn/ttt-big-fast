@@ -1698,7 +1698,7 @@ above +0.005, loss within 0.01 of arm C's plain level (2.6979).
 | arm F, gates start at 0.1, 40 steps | TTT on | TTT off | gate mean at step 39 | step-0 loss |
 |---|---|---|---|---|
 | trained through the inner loop | 2.7239 | 2.7385 | 0.0922 | 5.4315 |
-| plain (`--inner none`) | pending (login GPU) | 2.7619 | 0.0921 | 5.5243 |
+| plain (`--inner none`) | 2.7476 | 2.7619 | 0.0921 | 5.5243 |
 
 Paired per book: TTT on against off +0.0130 [+0.0097, +0.0164], 22/22 (against +0.0013 with
 the zero gate); against its control with the write off, +0.0345 [+0.0277, +0.0412], 22/22;
@@ -1707,7 +1707,26 @@ against arm C trained through the inner loop (`C_32k_k1024_t4_s40`, 2.6777), -0.
 failed by 0.026. The gates drifted DOWN from 0.100 to 0.092 in both runs: the outer loop
 prefers less of the prime MLP, whose random init raises the step-0 loss from 5.07 (arm C) to
 5.43. Forty steps are not enough for a 50M-parameter random MLP to earn its place next to a
-pretrained one; the 2x2 (plain control scored with the write on) follows.
+pretrained one.
+
+The 2x2 (plain control scored with the write on through `--load-slow`; its TTT-off number
+reproduced 2.7619), per book:
+
+| effect, arm F at gate 0.1, 40 steps | mean | 95% CI | books | arm C, same settings (2026-09-21) |
+|---|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0130 | [+0.0097, +0.0164] | 22/22 | +0.0278 |
+| TTT at eval, plain fine-tuned weights | +0.0127 | [+0.0092, +0.0163] | 22/22 | +0.0195 |
+| training with TTT, evaluated with TTT | +0.0217 | [+0.0179, +0.0255] | 22/22 | +0.0179 |
+| training with TTT, evaluated without | +0.0214 | [+0.0176, +0.0252] | 22/22 | +0.0096 |
+| INTERACTION | +0.0003 | [-0.0004, +0.0010] | 16/22 | +0.0083 [+0.0062, +0.0104], 22/22 |
+
+With a small extra fast MLP the four effects are exactly additive: the interaction is zero.
+Training through the inner loop gives better slow weights (+0.0214 with the write off), and
+the write is worth the same on either set (+0.0130 against +0.0127). The same 40 steps with the
+pretrained MLPs as fast weights gave an interaction of +0.0083 in 22 of 22 books. This is the
+first direct comparison of the two layouts and it favours the big fast weights, with the
+caveats that arm F's prime MLP starts from random weights, that its gate init and inner rate
+have not been tuned, and that it trails arm C by 0.040 in loss.
 
 ### Recall of the token-rate weights
 

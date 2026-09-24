@@ -50,6 +50,7 @@ context is worth most".
 | window 1024, 10 steps | 2.9440 / 3.0041 | 3.0212 / 3.0682 | +0.0126 | [+0.0098, +0.0153] | 22/22 | "Arm C at k = 1024, 10 steps" |
 | window 1024, 40 steps | 2.6777 / 2.7086 | 2.6979 / 2.7196 | +0.0083 | [+0.0062, +0.0104] | 22/22 | "Arm C at k = 1024, 40 steps" |
 | window 1024, 40 steps, Muon 1.2e-4 in training AND evaluation | 2.6762 / 2.7380 | 2.7079 / 2.7196 | +0.0492 | [+0.0457, +0.0527] | 22/22 | "The 2x2 under Muon"; mostly dependence: meta minus plain is +0.0291 with TTT on and -0.0201 with it off |
+| arm F (prime MLP 2048, gate init 0.1), window 1024, 40 steps, normalized SGD 4e-6 | 2.7239 / 2.7385 | 2.7476 / 2.7619 | +0.0003 | [-0.0004, +0.0010] | 16/22 | "Arm F with the gates at 0.1"; additive; arm C at the same settings +0.0083 |
 | window 1024, 40 steps, Muon 2.4e-4 in training AND evaluation | 2.7452 / 2.8008 | 2.8106 / 2.7196 | +0.1439 | [+0.1365, +0.1514] | 22/22 | "Meta-training through Muon at 2.4e-4"; meta minus plain +0.0628 with TTT on, -0.0811 off; recall +1.4570 |
 | SlimPajama, window 1024, 40 steps, 96 sequences | 2.2789 / 2.3193 | 2.2920 / 2.3252 | +0.0074 | [+0.0056, +0.0091] | 85/88 | "SlimPajama at k = 1024" |
 

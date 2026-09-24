@@ -27,7 +27,7 @@ clustered by document (`ttt/eval/paired.py`).
 | C | same | LoRA + norms + learned step sizes | measured at 10 and 40 steps (window 8192 and 1024, PG-19 and SlimPajama); 725-step runs queued |
 | D | same | every parameter (`--arm D`, slow spec `**`) | 10-step feasibility only; needs its own outer-rate sweep at `truncate_bptt=1` |
 | E | the released TTT-E2E 760M checkpoint | evaluation only | scored once at 8K; not at 32K |
-| F | a small extra "prime" MLP per fast block (paper layout; width `--prime-intermediate`, LaCT output RMSNorm and zero gate), its W_0 meta-learned | as C plus the gate | implemented 2026-09-23 (code only); never run on Llama |
+| F | a small extra "prime" MLP per fast block (paper layout; width `--prime-intermediate`, LaCT output RMSNorm and gate), its W_0 meta-learned | as C plus the gate | run 2026-09-24 at window 1024, 40 steps: zero gate never opens; at gate init 0.1 the 2x2 interaction is +0.0003 (arm C: +0.0083); trails arm C by 0.040 |
 
 ## Protocol (what every 32K number shares unless a table says otherwise)
 
