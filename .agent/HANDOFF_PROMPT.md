@@ -124,8 +124,8 @@ ssh della-pli "grep -E '^\[eval\]|^ttt_on|^\[train\]' /scratch/gpfs/ARORA/hh9077
 4. A reasoning form of the recall test (facts stated early, a question much later whose answer
    is not in the text). Nothing is built. Copying is the necessary first step and is measured.
 5. Matched-budget run through Muon once 1 is done; the PLI partition can hold it.
-6. Housekeeping: arm D outer-rate sweep at `truncate_bptt=1`; arm F is NOT IMPLEMENTED
-   (`--arm F` refuses to run; keep it that way until it is real); the forgetting probe on
+6. Housekeeping: arm D outer-rate sweep at `truncate_bptt=1`; arm F was built on
+   2026-09-23 (`--arm F --prime-intermediate 2048`) but has never run; the forgetting probe on
    Llama; seeds; `docs/preprint/main.tex` still describes the JAX plan.
 
 Before every long job: a short validation job that reaches evaluation and writes its result,
@@ -220,7 +220,7 @@ Reading results:
   are `per_sequence_loss`. Check an array's shape and meaning before computing on it.
 - Before quoting a trend, confirm every row shares every setting except the one varied; open
   the result files. A wrong 8K/16K/32K trend was quoted to Helen three times this way.
-- A placeholder configuration must refuse to run (arm F). An arm once had an EMPTY slow set
+- A placeholder configuration must refuse to run (arm F did until 2026-09-23). An arm once had an EMPTY slow set
   because `"**"` was matched as a substring; print and read the parameter counts of any new
   configuration (`[run] fast=... slow=... frozen=...`).
 - A signature supports a mechanism only if rival explanations predict something different:

@@ -27,7 +27,7 @@ clustered by document (`ttt/eval/paired.py`).
 | C | same | LoRA + norms + learned step sizes | measured at 10 and 40 steps (window 8192 and 1024, PG-19 and SlimPajama); 725-step runs queued |
 | D | same | every parameter (`--arm D`, slow spec `**`) | 10-step feasibility only; needs its own outer-rate sweep at `truncate_bptt=1` |
 | E | the released TTT-E2E 760M checkpoint | evaluation only | scored once at 8K; not at 32K |
-| F | a small extra MLP (paper layout) | as C | NOT IMPLEMENTED; `--arm F` refuses to run |
+| F | a small extra "prime" MLP per fast block (paper layout; width `--prime-intermediate`, LaCT output RMSNorm and zero gate), its W_0 meta-learned | as C plus the gate | implemented 2026-09-23 (code only); never run on Llama |
 
 ## Protocol (what every 32K number shares unless a table says otherwise)
 
@@ -129,6 +129,11 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 
+Measurement order once Della is reachable (all on the 40-step window-1024 weights unless
+said otherwise): (a) bf16 Newton-Schulz speed and recall against fp32; (b) `row_reset` recall and
+loss at Muon 1.2e-4 and 2.4e-4; (c) memory probe at chunk 2048, window 2048; (d) 6-step
+validations of `--token-rates` and of arm F, then their 40-step pairs.
+
 LaCT is "Test-Time Training Done Right" (arXiv 2505.23884). A sub-agent read the full PDF on
 2026-09-23 and compared it with this project row by row; Helen chose these five items.
 
@@ -141,19 +146,27 @@ LaCT is "Test-Time Training Done Right" (arXiv 2505.23884). A sub-agent read the
    the measured 20 s per sequence against 3.4. Needs a memory probe and its own plain control.
 2. Arm F (a small extra fast MLP, the paper's layout) built with LaCT's RMSNorm on the fast
    output followed by a zero-initialised gate (LaCT Alg. 2, App. C.3), so the new memory
-   leaves the pretrained model untouched at step 0. `--arm F` keeps refusing until it is real.
+   leaves the pretrained model untouched at step 0. Built 2026-09-23 (`--arm F
+   --prime-intermediate 2048`; the prime W_0 is trained by the outer loop through
+   `TrainConfig.fast_init_trained`). Not yet run: needs a memory probe, a 6-step validation
+   and a 40-step pair at window 1024.
 3. Per-token learning rates as a slow parameter: eta_t = softplus(Linear(x_t) + bias), one
    small linear layer per fast block, meta-learned through the inner loop (LaCT Eq. 4,
    Alg. 1 and 2). Under a normalized or Muon rule they only weight tokens against each other
    inside a chunk (LaCT Sec. 3.2). This is the cheaper form of "the LoRA weights the fast
-   update" (the meta-learned preconditioner below).
+   update" (the meta-learned preconditioner below). Built 2026-09-23 (`--token-rates`; eta = 1 at init, so a
+   fresh run equals one without the flag). Not yet run.
 4. L2 row normalization of the fast weights after each inner step, no weight decay (LaCT
    Alg. 1 and 3, Sec. 3.2: each row of W - g is rescaled to the row norm of W). Test first at
    evaluation time on the existing 40-step weights with the recall test. The hope is a larger
-   stable inner rate, which caps every memory result so far.
-5. Deferred: the bf16 Newton-Schulz iteration. On a 2048 x 8192 matrix it differs from the
-   fp32 iteration by 1.9% in relative Frobenius norm (singular values [0.673, 1.137] against
-   [0.682, 1.134]). The speed gain is not measured. Measure both before deciding.
+   stable inner rate, which caps every memory result so far. Built 2026-09-23
+   (`--weight-norm row_reset`). Not yet run.
+5. The bf16 Newton-Schulz iteration, built 2026-09-23 (`--ns-dtype bfloat16`; default
+   float32 unchanged). On a 2048 x 8192 matrix it differs from the fp32 iteration by 1.9% in
+   relative Frobenius norm (singular values [0.673, 1.137] against [0.682, 1.134]). Helen
+   approved it after that number; the speed gain and the effect on recall and loss are not
+   measured. Prediction: evaluation from 20 s to under 8 s per sequence, meta-training step
+   from 301 s to under 150 s, recall within 0.02 of +1.0241.
 6. Then: the meta-learned preconditioner as a slow weight; two Muon steps per chunk
    (evaluation only first; measure second-order memory with `scripts/memory_probe.py`); a
    reasoning form of the recall test; arm D's outer-rate sweep at `truncate_bptt=1`; the

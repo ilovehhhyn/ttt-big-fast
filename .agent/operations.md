@@ -77,7 +77,20 @@ sbatch --job-name=NAME --qos=gpu-test --time=01:00:00 scripts/della/run_arm.sbat
 ```
 
 Its plain fine-tuning control is the same command with `--inner none` (equivalent to
-`--inner-lr 0` and 1.9x faster). Evaluate trained weights under another inner rule with
+`--inner-lr 0` and 1.9x faster).
+
+Options added on 2026-09-23 (all off by default; none has run on Llama yet):
+
+| flag | what it does | belongs to |
+|---|---|---|
+| `--ns-dtype bfloat16` | the five Newton-Schulz rounds in bf16; weights, gradient and update stay fp32 | `--inner muon` only |
+| `--weight-norm row_reset` | after every inner step each row of a fast matrix is rescaled to its pre-step norm (LaCT Alg. 1 and 3) | any inner rule |
+| `--token-rates` | per-token learning rates on the write, one linear layer per fast block, a slow parameter (LaCT Eq. 4); eta = 1 at init | arms C and D |
+| `--arm F --prime-intermediate 2048` | the paper layout: a small extra fast MLP per fast block with output RMSNorm and a zero gate; its W_0 is trained by the outer loop | arm F requires the width; other arms refuse it |
+| `--chunk 2048 --window 2048` | the larger chunk (no new code); the window must be at least the chunk | any arm |
+
+Every one of these is recorded in the result file's `args` block and in the resume fingerprint;
+a checkpoint written before a flag existed resumes only at the flag's default. Evaluate trained weights under another inner rule with
 `--mode eval --load-slow RESULT.ckpt` (settings may differ; a resume goes through `--ckpt` and
 must match).
 

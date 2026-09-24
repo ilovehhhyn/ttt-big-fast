@@ -43,3 +43,9 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   21/22 books; with TTT off the plain fine-tune is now slightly better (-0.0024). New agent
   took over at 18:30; suite passed locally (237 tests); Muon 40-step link 1 running at 301 s
   per step on its A100 (286 in the validation job).
+  Later: Helen adopted five LaCT ideas (plan.md, "Planned after that") and, after seeing the
+  1.9% bf16 difference, the bf16 Newton-Schulz change too. Built and tested locally, in
+  order: `--ns-dtype bfloat16`, `--weight-norm row_reset`, `--token-rates`, and arm F
+  (`--prime-intermediate`, `fast_init_trained`); 262 tests pass. Nothing measured on Llama:
+  the Della SSH session lapsed at about 19:30 and did not come back during the session.
+  choobi updated `.agent/README.md` (it cannot see `plan.md`); the rest by hand.
