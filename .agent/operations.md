@@ -90,7 +90,9 @@ Options added on 2026-09-23 (all off by default; none has run on Llama yet):
 | `--chunk 2048 --window 2048` | the larger chunk (no new code); the window must be at least the chunk | any arm |
 
 Every one of these is recorded in the result file's `args` block and in the resume fingerprint;
-a checkpoint written before a flag existed resumes only at the flag's default. Evaluate trained weights under another inner rule with
+a checkpoint written before a flag existed resumes only at the flag's default.
+
+Evaluate trained weights under another inner rule with
 `--mode eval --load-slow RESULT.ckpt` (settings may differ; a resume goes through `--ckpt` and
 must match).
 
