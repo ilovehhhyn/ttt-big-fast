@@ -93,6 +93,17 @@ class InnerOptimizer(ABC):
         ...
 
     @abstractmethod
+    def _update(
+        self,
+        fast: dict[str, Tensor],
+        grads: dict[str, Tensor],
+        state: dict[str, Any],
+        *,
+        lr_scale: Tensor | float = 1.0,
+        lr_mult: dict[str, Tensor] | None = None,
+    ) -> tuple[dict[str, Tensor], dict[str, Any]]:
+        """The rule's own update. Returns (new_fast, new_state). Pure: inputs are not mutated."""
+
     def step(
         self,
         fast: dict[str, Tensor],
@@ -102,7 +113,8 @@ class InnerOptimizer(ABC):
         lr_scale: Tensor | float = 1.0,
         lr_mult: dict[str, Tensor] | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any]]:
-        """Return (new_fast, new_state). Pure: inputs are not mutated."""
+        """One inner step: the rule's update. Pure: inputs are not mutated."""
+        return self._update(fast, grads, state, lr_scale=lr_scale, lr_mult=lr_mult)
 
 
 class NoOpInnerOptimizer(InnerOptimizer):
@@ -115,7 +127,7 @@ class NoOpInnerOptimizer(InnerOptimizer):
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         return {}
 
-    def step(
+    def _update(
         self,
         fast: dict[str, Tensor],
         grads: dict[str, Tensor],
@@ -142,7 +154,7 @@ class NormalizedSGD(InnerOptimizer):
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         return {}
 
-    def step(
+    def _update(
         self,
         fast: dict[str, Tensor],
         grads: dict[str, Tensor],
@@ -231,7 +243,7 @@ class DifferentiableAdamW(InnerOptimizer):
             "bias_correct": True,
         }
 
-    def step(
+    def _update(
         self,
         fast: dict[str, Tensor],
         grads: dict[str, Tensor],
@@ -321,7 +333,7 @@ class MuonNoMomentum(InnerOptimizer):
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         return {}
 
-    def step(
+    def _update(
         self,
         fast: dict[str, Tensor],
         grads: dict[str, Tensor],
@@ -363,7 +375,7 @@ class ClippedSGD(InnerOptimizer):
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         return {}
 
-    def step(self, fast, grads, state, *, lr_scale=1.0, lr_mult=None):
+    def _update(self, fast, grads, state, *, lr_scale=1.0, lr_mult=None):
         _check_keys(fast, grads, lr_mult)
         keys = sorted(fast)
         sq = torch.stack([grads[k].reshape(-1).pow(2).sum() for k in keys]).sum()
@@ -398,7 +410,7 @@ class PreconditionedSGD(InnerOptimizer):
     def init_state(self, fast: dict[str, Tensor], first_grad: dict[str, Tensor] | None = None) -> dict[str, Any]:
         return {}
 
-    def step(
+    def _update(
         self,
         fast: dict[str, Tensor],
         grads: dict[str, Tensor],
