@@ -81,3 +81,5 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   16:30 (not by this agent). Venv repointed, torch imports, optimizer tests pass on Della;
   validation resubmitted (14389174). Had a PLI chain started in between it would have failed
   the same way and burnt its spare link.
+  18:20: the 2-GPU Muon 2.4e-4 bf16 validation passed every phase (14389174); the PLI chain
+  Ck1024_match_muon24 stays queued.
