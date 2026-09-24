@@ -116,6 +116,14 @@ def resolve_prime_intermediate(arm: str, value: int | None) -> int | None:
     return None
 
 
+def resolve_prime_gate_init(arm: str, value: float | None) -> float:
+    """Arm F's gate init: 0.0 (LaCT) unless given; any other arm refuses the flag."""
+    if ARMS[arm]["prime"]:
+        return 0.0 if value is None else value
+    assert value is None, f"--prime-gate-init {value} has no effect with --arm {arm}; it belongs to --arm F"
+    return 0.0
+
+
 def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
     """The inner step size, or a hard error if an active inner optimizer was given none.
 
@@ -134,6 +142,7 @@ def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
 def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoop, torch.device]:
     arm = ARMS[args.arm]
     prime_intermediate = resolve_prime_intermediate(args.arm, args.prime_intermediate)
+    prime_gate_init = resolve_prime_gate_init(args.arm, args.prime_gate_init)
     device = torch.device(args.device)
     if args.arm == "E":
         return _build_arm_e(args, arm, device)
@@ -144,7 +153,8 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
                             chunk_size=args.chunk, fast_blocks=args.fast_blocks,
                             lora=lora if lora.rank > 0 else None,
                             dtype=torch.float32, cache_dir=args.hf_cache, token_rates=args.token_rates,
-                            prime=arm["prime"], prime_intermediate_size=prime_intermediate, prime_gate=arm["prime"])
+                            prime=arm["prime"], prime_intermediate_size=prime_intermediate, prime_gate=arm["prime"],
+                            prime_gate_init=prime_gate_init)
     # Master weights stay fp32; the forward runs under bf16 autocast (see
     # TTTInnerLoop._autocast). remat_blocks trades compute for the math-SDPA score
     # matrices, which dominate activation memory in the second-order path.
@@ -256,6 +266,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prime-intermediate", type=int, default=None,
                    help="arm F only, REQUIRED there: hidden width of the extra fast MLP (2048 chosen on "
                         "2026-09-23; Llama's own MLP is 8192)")
+    p.add_argument("--prime-gate-init", type=float, default=None,
+                   help="arm F only: initial value of each prime gate (default 0.0, LaCT's zero init). The 40-step "
+                        "run of 2026-09-24 never opened a zero gate; a nonzero init is a recorded deviation")
     p.add_argument("--token-rates", action="store_true",
                    help="per-token learning rates on the fast-weight write, eta_t = softplus(w.x_t + b), one "
                         "linear layer per fast block, meta-learned as a slow parameter (LaCT Eq. 4). "

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from ttt.run import ARMS, resolve_prime_intermediate, resolve_slow_spec
+from ttt.run import ARMS, resolve_prime_gate_init, resolve_prime_intermediate, resolve_slow_spec
 
 
 def test_token_rates_join_the_slow_set_of_an_arm_that_has_one():
@@ -32,3 +32,12 @@ def test_arm_f_requires_a_prime_width_and_other_arms_refuse_one():
         assert resolve_prime_intermediate(arm, None) is None
         with pytest.raises(AssertionError, match="no effect"):
             resolve_prime_intermediate(arm, 2048)
+
+
+def test_prime_gate_init_belongs_to_arm_f_and_defaults_to_zero_there():
+    assert resolve_prime_gate_init("F", None) == 0.0
+    assert resolve_prime_gate_init("F", 0.1) == 0.1
+    for arm in ("A", "B", "C", "D", "E"):
+        assert resolve_prime_gate_init(arm, None) == 0.0
+        with pytest.raises(AssertionError, match="no effect"):
+            resolve_prime_gate_init(arm, 0.1)

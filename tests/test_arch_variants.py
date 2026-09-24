@@ -276,3 +276,17 @@ def test_gated_prime_output_is_rms_normalised_before_the_gate():
     torch.testing.assert_close(y, want)
     rms = branch.pow(2).mean(-1).sqrt()
     torch.testing.assert_close(rms, torch.ones_like(rms), rtol=1e-4, atol=1e-4)
+
+
+def test_prime_gate_init_sets_every_gate_and_requires_the_gate():
+    """A nonzero gate init is a deliberate deviation from LaCT's zero init (the 40-step arm F
+    run of 2026-09-24 never opened its gates); it must be explicit and must need prime_gate."""
+    from ttt.model.block import TransformerBlock
+
+    with pytest.raises(AssertionError, match="prime_gate_init.*prime_gate"):
+        cfg(prime=True, prime_intermediate_size=8, prime_gate_init=0.1)
+    c = cfg(prime=True, prime_intermediate_size=8, prime_gate=True, prime_gate_init=0.1)
+    block = TransformerBlock(c, use_math_backend=True, is_fast_block=True)
+    assert block.prime_gate.item() == torch.tensor(0.1).item()  # the float32 rounding of 0.1
+    assert TransformerBlock(cfg(prime=True, prime_intermediate_size=8, prime_gate=True),
+                            use_math_backend=True, is_fast_block=True).prime_gate.item() == 0.0

@@ -68,7 +68,7 @@ class TransformerBlock(nn.Module):
                 self.ffn_prime_post_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
             if cfg.prime_gate:
                 self.ffn_prime_out_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
-                self.prime_gate = nn.Parameter(torch.zeros(()))
+                self.prime_gate = nn.Parameter(torch.full((), float(cfg.prime_gate_init)))
         self.has_token_rate = bool(cfg.token_rates and is_fast_block)
         if self.has_token_rate:
             self.token_rate = TokenRate(hidden_size=cfg.hidden_size)

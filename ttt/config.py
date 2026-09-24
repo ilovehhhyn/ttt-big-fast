@@ -89,6 +89,9 @@ class ModelConfig:
     # so the pretrained block is untouched at step 0 (LaCT, arXiv 2505.23884, Alg. 2, App. C.3).
     prime_intermediate_size: int | None = None
     prime_gate: bool = False
+    # Initial value of every prime gate. 0.0 is LaCT's choice; a nonzero value is a deliberate
+    # deviation for short runs, where a zero gate gives the prime MLP no gradient to start from.
+    prime_gate_init: float = 0.0
     # Per-token learning rates on the fast-weight write (ttt/model/token_rate.py); a slow
     # parameter, so the run's slow_spec must include "token_rate" (ttt.run enforces it).
     token_rates: bool = False
@@ -107,6 +110,9 @@ class ModelConfig:
         )
         assert self.prime_intermediate_size is None or self.prime_intermediate_size > 0
         assert not self.prime_gate or self.prime, "prime_gate=True requires prime=True; set prime or drop it"
+        assert self.prime_gate_init == 0.0 or self.prime_gate, (
+            f"prime_gate_init={self.prime_gate_init} requires prime_gate=True; set prime_gate or drop it"
+        )
 
     @property
     def fast_module(self) -> str:
