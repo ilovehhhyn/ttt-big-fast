@@ -144,3 +144,89 @@ def test_a_finished_result_is_recognised_and_an_unfinished_one_is_not(tmp_path):
     assert not result_is_complete(out)                                   # trained, not evaluated
     out.write_text(json.dumps({"arm": "C", "history": [], "eval": {"loss": 2.5}}))
     assert result_is_complete(out)
+
+
+# --------------------------------------------------------------------------- arm F pieces
+
+
+def test_prime_size_and_gate_require_prime():
+    with pytest.raises(AssertionError, match="prime_intermediate_size.*prime"):
+        cfg(prime_intermediate_size=8)
+    with pytest.raises(AssertionError, match="prime_gate.*prime"):
+        cfg(prime_gate=True)
+    c = cfg(prime=True, prime_intermediate_size=8, prime_gate=True)
+    assert c.prime_intermediate == 8
+    assert cfg(prime=True).prime_intermediate == cfg().intermediate_size
+
+
+def test_prime_mlp_has_its_own_size_and_no_lora():
+    """The prime MLP is trained directly by the outer loop, so LoRA on it would be a
+    second parametrisation of the same matrix; the block's own MLP keeps its LoRA."""
+    from ttt.model.block import TransformerBlock
+
+    c = cfg(prime=True, prime_intermediate_size=8, lora=LoRAConfig(rank=2, alpha=4.0, targets=("w1", "w2", "w3")))
+    block = TransformerBlock(c, use_math_backend=True, is_fast_block=True)
+    assert block.mlp_prime.w1.weight.shape == (8, c.hidden_size)
+    assert block.mlp_prime.w2.weight.shape == (c.hidden_size, 8)
+    assert not any("mlp_prime" in n and "lora_" in n for n, _ in block.named_parameters())
+    assert any(n.startswith("mlp.w1.lora_") for n, _ in block.named_parameters())
+
+
+def test_gated_prime_block_equals_the_plain_block_at_init_and_opens_with_the_gate():
+    """Invariant (LaCT Alg. 2, App. C.3): with the gate at 0 the block output is exactly the
+    pretrained block's, the prime MLP receives a zero gradient, and the gate itself does not.
+    Witness: after the gate is set to 1 the output differs and the prime MLP's gradient is
+    nonzero, so the zero at init is the gate and not a dead module."""
+    from ttt.model.block import TransformerBlock
+    from ttt.model.rope import build_rope_cache
+
+    c_plain, c_prime = cfg(), cfg(prime=True, prime_intermediate_size=8, prime_gate=True)
+    torch.manual_seed(0)
+    plain = TransformerBlock(c_plain, use_math_backend=True, is_fast_block=True)
+    gated = TransformerBlock(c_prime, use_math_backend=True, is_fast_block=True)
+    gated.load_state_dict(plain.state_dict(), strict=False)
+    x = torch.randn(1, 8, c_plain.hidden_size)
+    cos, sin = build_rope_cache(c_plain.head_dim, 8, c_plain.rope)
+    prime_weights = [gated.mlp_prime.w1.weight, gated.mlp_prime.w2.weight, gated.mlp_prime.w3.weight]
+
+    y_plain, _ = plain(x, cos, sin, None)
+    y_gated, _ = gated(x, cos, sin, None)
+    g_prime = torch.autograd.grad((y_gated**2).sum(), prime_weights + [gated.prime_gate])
+
+    assert gated.prime_gate.item() == 0.0
+    torch.testing.assert_close(y_gated, y_plain, rtol=0.0, atol=0.0)
+    assert all(g.abs().max().item() == 0.0 for g in g_prime[:3])
+    assert g_prime[3].abs().item() > 0.0, "the gate must receive a gradient or it never opens"
+    with torch.no_grad():
+        gated.prime_gate.fill_(1.0)
+    y_open, _ = gated(x, cos, sin, None)
+    g_open = torch.autograd.grad((y_open**2).sum(), prime_weights)
+    assert (y_open - y_plain).abs().max().item() > 1e-3
+    assert all(g.abs().max().item() > 0.0 for g in g_open)
+
+
+def test_gated_prime_output_is_rms_normalised_before_the_gate():
+    """prime_out = gate * RMSNorm(mlp_prime(norm(h))): with gate = 1 and unit norm gains the
+    branch has unit RMS per token, whatever the prime MLP's scale."""
+    from ttt.model.block import TransformerBlock
+    from ttt.model.rope import build_rope_cache
+
+    c = cfg(prime=True, prime_intermediate_size=8, prime_gate=True)
+    torch.manual_seed(0)
+    block = TransformerBlock(c, use_math_backend=True, is_fast_block=True)
+    with torch.no_grad():
+        block.prime_gate.fill_(1.0)
+        for w in (block.mlp_prime.w1.weight, block.mlp_prime.w2.weight, block.mlp_prime.w3.weight):
+            w.mul_(50.0)
+    x = torch.randn(1, 8, c.hidden_size)
+    cos, sin = build_rope_cache(c.head_dim, 8, c.rope)
+
+    y, _ = block(x, cos, sin, None)
+    attn_out, _ = block.attn(block.seq_norm(x), cos, sin, None)
+    h = x + attn_out
+    branch = block.ffn_prime_out_norm(block.mlp_prime(block.ffn_prime_norm(h)))
+    want = (h + branch) + block.mlp(block.ffn_norm(h + branch))
+
+    torch.testing.assert_close(y, want)
+    rms = branch.pow(2).mean(-1).sqrt()
+    torch.testing.assert_close(rms, torch.ones_like(rms), rtol=1e-4, atol=1e-4)

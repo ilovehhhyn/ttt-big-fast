@@ -83,6 +83,12 @@ class ModelConfig:
     qk_norm: bool = False  # RMSNorm on q and k per head before RoPE
     post_norm: bool = False  # extra RMSNorm on each sublayer output (pre+post norm)
     prime: bool = False  # see `fast_module`
+    # Arm F only (require prime). prime_intermediate_size: hidden width of the prime MLP
+    # (None: the block's own intermediate_size, as arm E's checkpoint has it). prime_gate:
+    # prime_out = gate * RMSNorm(mlp_prime(x)) with a scalar gate per block that starts at 0,
+    # so the pretrained block is untouched at step 0 (LaCT, arXiv 2505.23884, Alg. 2, App. C.3).
+    prime_intermediate_size: int | None = None
+    prime_gate: bool = False
     # Per-token learning rates on the fast-weight write (ttt/model/token_rate.py); a slow
     # parameter, so the run's slow_spec must include "token_rate" (ttt.run enforces it).
     token_rates: bool = False
@@ -96,6 +102,11 @@ class ModelConfig:
         # k >= b: the window must cover a whole chunk so the model can see
         # within-chunk context before TTT updates the weights (paper 2.3).
         assert self.window_size >= self.chunk_size, "window_size must be >= chunk_size"
+        assert self.prime_intermediate_size is None or self.prime, (
+            f"prime_intermediate_size={self.prime_intermediate_size} requires prime=True; set prime or drop it"
+        )
+        assert self.prime_intermediate_size is None or self.prime_intermediate_size > 0
+        assert not self.prime_gate or self.prime, "prime_gate=True requires prime=True; set prime or drop it"
 
     @property
     def fast_module(self) -> str:
@@ -108,6 +119,11 @@ class ModelConfig:
                                 (TTT-E2E 2.3.1, `feed_forward_prime` in their code).
         """
         return "mlp_prime" if self.prime else "mlp"
+
+    @property
+    def prime_intermediate(self) -> int:
+        """Hidden width of the prime MLP: its own size, or the block's when none is set."""
+        return self.intermediate_size if self.prime_intermediate_size is None else self.prime_intermediate_size
 
     @property
     def head_dim(self) -> int:

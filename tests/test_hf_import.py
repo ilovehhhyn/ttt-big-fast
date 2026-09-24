@@ -124,3 +124,23 @@ def test_logits_match_hf():
     print(f"max|delta|={err:.4f} corr={corr:.6f}")
     assert corr > 0.9999, f"logit correlation {corr}"
     assert err < 0.5, f"max abs logit error {err}"
+
+
+def test_arm_f_prime_parameters_are_the_only_ones_without_an_hf_counterpart():
+    """Arm F adds mlp_prime, its two norms and the gate to each fast block; everything
+    else still loads from Llama."""
+    from ttt.model.transformer import TTTTransformer
+    cfg = model_config_from_hf(LLAMA32_1B_CONFIG, window_size=8192, chunk_size=1024, fast_blocks=4,
+                               prime=True, prime_intermediate_size=2048, prime_gate=True)
+    cfg_small = type(cfg)(**{**cfg.__dict__, "num_layers": 2, "vocab_size": 64,
+                             "hidden_size": 32, "intermediate_size": 64, "prime_intermediate_size": 16,
+                             "num_heads": 4, "num_kv_heads": 2, "window_size": 8, "chunk_size": 4,
+                             "fast_blocks": 1})
+    model = TTTTransformer(cfg_small, max_seq_len=16)
+    targets = set(hf_key_map(cfg_small.num_layers, tied=True).values())
+    own = {n for n, _ in model.named_parameters() if "lora_" not in n and not n.startswith("inner_lr_log.")}
+    assert own - targets == {
+        "blocks.1.mlp_prime.w1.weight", "blocks.1.mlp_prime.w2.weight", "blocks.1.mlp_prime.w3.weight",
+        "blocks.1.ffn_prime_norm.weight", "blocks.1.ffn_prime_out_norm.weight", "blocks.1.prime_gate"}
+    assert targets - own == set()
+    assert (cfg.prime, cfg.prime_intermediate, cfg.prime_gate) == (True, 2048, True)

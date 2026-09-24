@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 
@@ -32,7 +33,10 @@ class TransformerBlock(nn.Module):
         x = x + [post](mlp(ffn_norm(x)))
 
     The prime MLP exists only in suffix (TTT) blocks, so it is created only when
-    `is_fast_block` is set.
+    `is_fast_block` is set. It carries no LoRA: arm F trains its weights directly. With
+    cfg.prime_gate (arm F) its output is normalised and gated by a scalar that starts at 0:
+
+        x = x + prime_gate * ffn_prime_out_norm(mlp_prime(ffn_prime_norm(x)))
 
     With cfg.token_rates (LaCT Eq. 4) a fast block also owns a `token_rate` that predicts a
     weight per token from the fast module's normalised input; the weight scales that
@@ -56,11 +60,15 @@ class TransformerBlock(nn.Module):
             self.seq_post_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
             self.ffn_post_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
         self.has_prime = bool(cfg.prime and is_fast_block)
+        self.has_prime_gate = bool(self.has_prime and cfg.prime_gate)
         if self.has_prime:
             self.ffn_prime_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
-            self.mlp_prime = SwiGLUMLP(cfg.hidden_size, cfg.intermediate_size, cfg.lora)
+            self.mlp_prime = SwiGLUMLP(cfg.hidden_size, cfg.prime_intermediate, None)
             if cfg.post_norm:
                 self.ffn_prime_post_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
+            if cfg.prime_gate:
+                self.ffn_prime_out_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
+                self.prime_gate = nn.Parameter(torch.zeros(()))
         self.has_token_rate = bool(cfg.token_rates and is_fast_block)
         if self.has_token_rate:
             self.token_rate = TokenRate(hidden_size=cfg.hidden_size)
@@ -84,6 +92,8 @@ class TransformerBlock(nn.Module):
             prime_out = self._rate_write(self.mlp_prime(prime_in), prime_in)
             if self.post_norm:
                 prime_out = self.ffn_prime_post_norm(prime_out)
+            if self.has_prime_gate:
+                prime_out = self.prime_gate * self.ffn_prime_out_norm(prime_out)
             h = h + prime_out
 
         ffn_in = self.ffn_norm(h)
