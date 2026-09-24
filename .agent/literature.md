@@ -46,6 +46,23 @@ truncated to 2 to 4 chunks (memory); 4 sequences per step in all short runs.
 | FwPKM, arXiv 2601.00671 | one gradient pass stores little (needle under 10%), repeated passes much more (over 70%) | sub-agent, 2026-09-21 |
 | Physics of language models, arXiv 2404.05405; arXiv 2505.24832 | about 2 to 3.6 bits per parameter of capacity, reached only after many exposures: at 32K to 128K tokens the limit is the write rule, not capacity | sub-agent, 2026-09-21 |
 
+## How the field measures (read 2026-09-24 by two sub-agents, full PDFs; the lead re-checked TTT-E2E only)
+
+| source | headline metric | memory or retrieval metric | check |
+|---|---|---|---|
+| TTT-E2E 2512.23675; TTT 2407.04620; LaCT 2505.23884; Titans 2501.00663; ATLAS 2505.23735; Gated DeltaNet 2412.06464; dynamic evaluation 1709.07432 | loss or perplexity first: loss minus full attention against context length (TTT-E2E Fig. 1), perplexity against token index (TTT Fig. 2), per-token loss against position (LaCT Fig. 5), Wikitext and LAMBADA perplexity tables (Titans, ATLAS, GDN) | RULER S-NIAH and BABILong accuracy as a secondary check; TTT-E2E scores 0.06 against full attention's 0.99 on S-NIAH-1 at 128K and explains it by compression (Sec. 3.5); TTT and dynamic evaluation run no retrieval test | sub-agent, in source |
+| PERK 2507.06415; TTT-NTP 2606.21803; In-Place TTT 2604.06169 | needle-style accuracy first (BABILong, RULER); PERK and TTT-NTP report no loss at all | needle tasks with hard distractors; PERK: needle facts are "easily distinguishable from distractor text" | sub-agent, in source |
+| continual learning: GEM 1706.08840; Chaudhry 1801.10112; Diaz-Rodriguez 1810.13166 | task-accuracy matrix R; average accuracy, backward and forward transfer, forgetting = peak past accuracy minus current | task level only; no per-fact measure | sub-agent, in source |
+| continual pretraining: 2403.08763; 2308.04014; TemporalWiki 2204.14211 | validation loss or perplexity on old and new data (forgetting = rise on the old data) | TemporalWiki: perplexity on fixed fact strings (unchanged against changed facts), the closest to per-fact retention | sub-agent, in source |
+| long-context benchmarks: RULER 2404.06654; BABILong 2406.10149; LongBench 2308.14508; Zoology 2312.04927; Based 2402.18668; Repeat After Me 2402.01032; Lost in the Middle 2307.03172 | exact-match accuracy: 500 examples per length in RULER, needle type and distractors varied; position changes accuracy by over 20% (Lost in the Middle) | Zoology and Based also use a LOSS SLICE: perplexity on tokens whose bigram already occurred in context (6.4% of Pile tokens carry 82% of the attention gap); state-size lower bounds for copying (Based Thm. 3.1, Repeat After Me Thm. 2.7) | sub-agent, in source |
+| loss-difference memory measures: induction heads 2209.11895 (loss at token 500 minus token 50; loss on a repeated random sequence); LongPPL 2410.23771 (long-short log-likelihood difference selects key tokens, perplexity on them correlates -0.96 with LongBench while plain perplexity is near 0); Khandelwal 1805.04623; Sun 2109.09115 | loss differences with and without context | the gain from distant context sits on a small set of copyable tokens | sub-agent; the last two from abstracts only |
+
+Where our recall test stands: it is the induction-heads repeated-sequence idea applied to natural
+text with a matched control (the absent condition keeps the carrier's own 1024 tokens, so both
+conditions train on the same amount of text), 32 passages from 20 books, one gap and one depth.
+The field would add: several gaps and depths, a per-token breakdown (content against function
+tokens), one exact-match probe past the window, and a loss slice on the tokens long context helps.
+
 ## Limits of a fixed-size memory
 
 | source | what it says | check |

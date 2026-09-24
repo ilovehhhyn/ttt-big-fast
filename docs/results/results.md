@@ -1528,9 +1528,12 @@ its TTT-off loss reproduced the control's own 2.7196. `scripts/two_by_two.py`, 3
    it takes the slow weights to make it pay in loss.
 3. Together with the recall result above: training through Muon teaches the slow weights to
    USE a strong write for the next-token loss (+0.0291 over plain, 22/22) without making the
-   write STORE more (recall -0.0235 against the normalized-SGD-trained weights). The thesis
-   that a small slow set captures most of what test-time training can give is, at this budget,
-   supported for loss and not for memory.
+   write STORE more verbatim text (recall -0.0235 against the normalized-SGD-trained weights).
+   On the field's headline metric, next-token loss (TTT-E2E Fig. 1, LaCT Fig. 5, TTT Fig. 2),
+   the thesis is supported at this budget. On verbatim recall it is not, which is also what
+   TTT-E2E reports for its own method (Table 2, "compression leaves out seemingly irrelevant
+   details"). The recall test is one probe (copying, one gap, one depth) and a lower bound on
+   memory, not a general memory score; see `.agent/literature.md`, "How the field measures".
 
 The Muon recall jobs did not repeat the no-TTT floor check (`exact_floor_checked` is false in
 their files); the floor is a property of attention's reach, not of the write rule, and was
