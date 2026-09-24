@@ -73,3 +73,6 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   08:40: the 150-step 2x2 at window 8192: interaction +0.0038 (from +0.0077 at 60), every
   other effect inside the noise. The 150-step control ran as a 2-GPU chain; I named it
   without the underscore the waiting script expected and renamed the files.
+  09:20: Helen's decision after the day's results: the window-1024 matched-budget arm C chain
+  switches to Muon 2.4e-4 in bf16 (Ck1024_match_muon24, jobs 14382085, 14382086); the
+  window-8192 pair and both controls stay. A 2-GPU 6-step validation (14382087) gates it.

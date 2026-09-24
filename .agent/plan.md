@@ -83,16 +83,21 @@ the `arora` copies (14237614 to 14237617, 14237645 to 14237648) were cancelled f
 |---|---|---|---|
 | 14330761, 14330762 | `C32k_match`: arm C, window 8192, 725 x 32, normalized SGD 4e-6, `--eval-ttt-off` | 4 H100s, 48 h per link | the reference budget |
 | 14330763, 14330764 | `C32k_match_ctl`: same with `--inner none` | 4 H100s, 30 h | its plain fine-tuning control |
-| 14330765, 14330766 | `Ck1024_match`: window 1024, `truncate_bptt=4`, same budget | 4 H100s, 24 h | the reference budget where the ceiling is larger |
+| 14382085, 14382086 (replaced 14330765, 14330766 on 2026-09-24 09:20, Helen's decision) | `Ck1024_match_muon24`: window 1024, `truncate_bptt=4`, same budget, `--inner muon --inner-lr 2.4e-4 --ns-dtype bfloat16`; everything else identical to the cancelled chain (submit line read back from Slurm) | 4 H100s, 24 h | the reference budget where the ceiling is larger, with the write that stores 54% of full attention. Sized from 78 s per 4 sequences on an A100 (bf16 Muon) against 55 for normalized SGD: about 15 h for 725 steps on 4 H100s, one link with a spare. A 2-GPU 6-step validation of this exact configuration (14382087) runs first on `gpu-test`; if it fails the chain is cancelled before it starts |
 | 14330767, 14330768 | `Ck1024_match_ctl` | 4 H100s, 16 h | its control |
 | 14169729 | `C32k_bs32s60`: 60 steps of 32 sequences (63M tokens), running since 2026-09-23 09:55 | 1 GPU, 22 h | closest single-GPU approach to the reference regime |
 | 14330259 | `C32k_ctl150` (4 GPUs): `--inner none` control for the 150-step run (`C32k_ctl60` finished: 2.5255) | `gpu-test`, 1 h | the 2x2 at 150 steps |
 | 14333213 to 14333217 | `C_32k_k1024_muon_s40`: 40 steps of arm C through Muon at 1.2e-4, window 1024, truncation 4, `--eval-ttt-off`; chain of five 1-hour links | `gpu-test` | THE next experiment; its 2x2 partner is the existing `C_32k_k1024_ctl_s40` |
 | login GPU | `scripts/della/login_cells_k8192_s60_s150.sh`: plain 60- and 150-step weights with TTT on and off (waits for `C32k_ctl150`) | 2 x 13 min | the 2x2 at 60 and 150 steps, window 8192 |
 
-All of these use the ORIGINAL write rule (normalized SGD at 4e-6). They test the thesis at the
-reference budget with the weak memory. Keep them; add a Muon run at that budget once Muon
-meta-training is validated and its orthogonalization is sped up.
+The window-8192 pair and both plain controls use the ORIGINAL write rule (normalized SGD at
+4e-6); the window-1024 arm C chain now uses Muon 2.4e-4 in bf16, its control unchanged (a plain
+fine-tune does not depend on the inner rule). Prediction, written 2026-09-24 before it runs:
+with the write on, the Muon-trained model beats its plain control under the same write by at
+least 0.06 per book (the 40-step value is +0.0628) and reaches a loss under 2.55 at 32K; recall
+at or above +1.40; with the write off it is worse than plain (dependence), as at 40 steps. If
+the gap to plain does not grow with the budget, the slow set tolerates the write rather than
+exploits it.
 
 ## Read on 2026-09-23 (details in `results.md` and R, "2026-09-23")
 
