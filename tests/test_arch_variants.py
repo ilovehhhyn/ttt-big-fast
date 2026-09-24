@@ -105,16 +105,60 @@ def test_prefix_segmented_equals_full():
         m.prefix_forward(ids, segment=16)
 
 
-def test_arm_f_refuses_to_run_until_it_is_implemented():
-    """ARMS["F"] is a placeholder identical to arm C. Running it would publish arm C's
-    numbers under arm F's name, so it must fail loudly instead."""
-    from types import SimpleNamespace
+def test_arm_f_is_a_real_configuration_distinct_from_arm_c():
+    """Arm F was a placeholder equal to arm C and refused to run. It now names the prime
+    layout: prime MLP fast, its W_0 trained, the gate slow."""
+    from ttt.run import ARMS
 
-    from ttt.run import ARMS, build_everything
+    assert ARMS["F"] != ARMS["C"]
+    assert ARMS["F"]["prime"] is True and ARMS["C"]["prime"] is False
+    assert "prime_gate" in ARMS["F"]["slow"] and "prime_gate" not in ARMS["C"]["slow"]
 
-    assert ARMS["F"] == ARMS["C"], "arm F now differs from C: replace this guard with a real test"
-    with pytest.raises(AssertionError, match="arm F is not implemented"):
-        build_everything(SimpleNamespace(arm="F", device="cpu"))
+
+def test_arm_f_gate_opens_at_the_first_outer_step_while_the_prime_weights_wait():
+    """One outer step on arm F's layout: the fast set is the prime MLP alone; the gate moves
+    off 0 (it gets a gradient); the prime W_0 does not move yet (its gradient is exactly 0
+    while the gate is 0); the pretrained MLP of the fast block stays frozen."""
+    from ttt.config import Config, InnerConfig, OuterConfig
+    from ttt.optim.inner import build_inner_optimizer
+    from ttt.optim.outer import build_outer_optimizer
+    from ttt.run import ARMS
+    from ttt.train.inner_loop import TTTInnerLoop
+    from ttt.train.trainer import Trainer
+
+    mcfg = cfg(prime=True, prime_intermediate_size=8, prime_gate=True, fast_blocks=1,
+               lora=LoRAConfig(rank=2, alpha=4.0))
+    tcfg = TrainConfig(seq_len=16, tokens_per_step=32, dtype="fp32", slow_spec=ARMS["F"]["slow"],
+                       fast_init_trained=True)
+    config = Config(model=mcfg, inner=InnerConfig(optimizer="normalized_sgd", lr_rms=1e-2, learned_lr=True),
+                    outer=OuterConfig(lr=1e-2, total_steps=10), train=tcfg)
+    torch.manual_seed(0)
+    model = TTTTransformer(mcfg, max_seq_len=16).double()
+    split = split_parameters(model, mcfg, tcfg)
+    assert sorted(split.fast) == ["blocks.3.mlp_prime.w1.weight", "blocks.3.mlp_prime.w2.weight", "blocks.3.mlp_prime.w3.weight"]
+    assert "blocks.3.prime_gate" in split.slow and "blocks.3.mlp.w1.weight" in split.frozen
+    assert set(split.outer) == set(split.slow) | set(split.fast)
+    loop = TTTInnerLoop(model, config, build_inner_optimizer(config.inner))
+    opt = build_outer_optimizer(split.outer, config.outer)
+    gate = split.slow["blocks.3.prime_gate"]
+    prime_before = {k: v.detach().clone() for k, v in split.fast.items()}
+    frozen_before = {k: v.detach().clone() for k, v in split.frozen.items()}
+
+    def batches():
+        g = torch.Generator().manual_seed(0)
+        while True:
+            ids = torch.randint(0, mcfg.vocab_size, (1, 16), generator=g)
+            tgt = torch.randint(0, mcfg.vocab_size, (1, 16), generator=g)
+            yield {"input_ids": ids, "targets": tgt, "loss_mask": torch.ones_like(tgt, dtype=torch.float64)}
+
+    metrics = Trainer(config, model, split, loop, opt, batches(), device=torch.device("cpu")).train_step(1)
+
+    assert metrics.loss > 0.0
+    assert gate.item() != 0.0, "the gate received no gradient"
+    for k, v in split.fast.items():
+        assert torch.equal(v, prime_before[k]), f"prime W_0 moved while the gate was 0: {k}"
+    for k, v in split.frozen.items():
+        assert torch.equal(v, frozen_before[k]), k
 
 
 def test_inner_lr_has_no_default_when_an_inner_optimizer_is_active():

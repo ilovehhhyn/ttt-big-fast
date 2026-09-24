@@ -50,9 +50,9 @@ ARMS = {
     # Arm E is the reference TTT-E2E model: a different architecture (24 layers, prime
     # MLPs, qk-norm, post-norm) loaded from a converted orbax checkpoint, scored on our
     # split. It is evaluation-only and uses e2e's exact inner rule.
-    "E": dict(inner="clipped_sgd", lora_rank=0, slow=()),
-    "A": dict(inner="none", lora_rank=0, slow=()),
-    "B": dict(inner="normalized_sgd", lora_rank=0, slow=()),
+    "E": dict(inner="clipped_sgd", lora_rank=0, slow=(), prime=False),
+    "A": dict(inner="none", lora_rank=0, slow=(), prime=False),
+    "B": dict(inner="normalized_sgd", lora_rank=0, slow=(), prime=False),
     # Arm C's slow set includes LoRA on the MLP (w1,w2,w3), i.e. on the fast weights
     # themselves. That is NOT redundant: in TTT-E2E the fast-weight INITIALISATION W0 is
     # the single most important slow parameter (their outer loop optimises it directly).
@@ -60,9 +60,14 @@ ARMS = {
     # it is exactly the mechanism that makes W0 a good starting point for test-time
     # updates. Omitting it removes the main lever. Attention LoRA additionally shapes what
     # gets written into the fast memory.
-    "C": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log")),
-    "D": dict(inner="normalized_sgd", lora_rank=0, slow=("**",)),
-    "F": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log")),
+    "C": dict(inner="normalized_sgd", lora_rank=64, slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log"), prime=False),
+    "D": dict(inner="normalized_sgd", lora_rank=0, slow=("**",), prime=False),
+    # F  paper layout: the pretrained MLP stays frozen as safe storage; a SMALL extra "prime" MLP
+    #    (width --prime-intermediate, LaCT-style output RMSNorm and a zero-initialised gate) is
+    #    the fast weight, its initial value W_0 is meta-learned (fast_init_trained), and the LoRA,
+    #    norms, step sizes and gate are slow as in C.
+    "F": dict(inner="normalized_sgd", lora_rank=64,
+              slow=("lora_A", "lora_B", "norm.weight", "inner_lr_log", "prime_gate"), prime=True),
 }
 
 
@@ -94,6 +99,23 @@ def resolve_slow_spec(arm_slow: tuple[str, ...], *, token_rates: bool) -> tuple[
     return arm_slow + ("token_rate",)
 
 
+def resolve_prime_intermediate(arm: str, value: int | None) -> int | None:
+    """Arm F's prime-MLP width, or None for every other arm.
+
+    There is no default width: the fast set's size is the experiment, so arm F requires
+    --prime-intermediate (2048 is the value chosen on 2026-09-23, a quarter of Llama's 8192),
+    and any other arm refuses it because it would change nothing.
+    """
+    if ARMS[arm]["prime"]:
+        assert value is not None and value > 0, (
+            "--prime-intermediate is required with --arm F: the width of the extra fast MLP has no "
+            "safe default (2048 was chosen on 2026-09-23)"
+        )
+        return value
+    assert value is None, f"--prime-intermediate {value} has no effect with --arm {arm}; it belongs to --arm F"
+    return None
+
+
 def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
     """The inner step size, or a hard error if an active inner optimizer was given none.
 
@@ -110,16 +132,8 @@ def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
 
 
 def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoop, torch.device]:
-    # Arm F is the paper-layout control: the pretrained MLP is kept static as safe storage
-    # and a separate prime MLP carries the fast weights (plan section 0.1, Task 7). That model
-    # construction does not exist on the Llama path yet, and the ARMS entry below is a
-    # placeholder identical to arm C. Refuse to run rather than report arm C's numbers
-    # under arm F's name.
-    assert args.arm != "F", (
-        "arm F is not implemented: build_llama_ttt cannot yet add a prime MLP, so --arm F "
-        "would silently run arm C's configuration. Implement the prime-MLP construction first."
-    )
     arm = ARMS[args.arm]
+    prime_intermediate = resolve_prime_intermediate(args.arm, args.prime_intermediate)
     device = torch.device(args.device)
     if args.arm == "E":
         return _build_arm_e(args, arm, device)
@@ -129,7 +143,8 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     model = build_llama_ttt(args.repo, max_seq_len=args.seq_len, window_size=args.window,
                             chunk_size=args.chunk, fast_blocks=args.fast_blocks,
                             lora=lora if lora.rank > 0 else None,
-                            dtype=torch.float32, cache_dir=args.hf_cache, token_rates=args.token_rates)
+                            dtype=torch.float32, cache_dir=args.hf_cache, token_rates=args.token_rates,
+                            prime=arm["prime"], prime_intermediate_size=prime_intermediate, prime_gate=arm["prime"])
     # Master weights stay fp32; the forward runs under bf16 autocast (see
     # TTTInnerLoop._autocast). remat_blocks trades compute for the math-SDPA score
     # matrices, which dominate activation memory in the second-order path.
@@ -154,7 +169,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
                         prefix_segment=args.prefix_segment,
                         truncate_bptt=args.truncate_bptt,
                         slow_spec=resolve_slow_spec(arm["slow"], token_rates=args.token_rates) or ("__none__",),
-                        dtype=args.dtype)
+                        fast_init_trained=arm["prime"], dtype=args.dtype)
     cfg = Config(model=model.cfg, inner=inner, outer=outer, train=train)
     split = split_parameters(model, model.cfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
@@ -238,6 +253,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "201M-parameter fast set); the measured 32K optimum is 4e-6. The old default, "
                         "1e-3, is 14x the unit and drives the loss to 20.2.")
     p.add_argument("--norm-scope", default="tensor", choices=["tensor", "global"])
+    p.add_argument("--prime-intermediate", type=int, default=None,
+                   help="arm F only, REQUIRED there: hidden width of the extra fast MLP (2048 chosen on "
+                        "2026-09-23; Llama's own MLP is 8192)")
     p.add_argument("--token-rates", action="store_true",
                    help="per-token learning rates on the fast-weight write, eta_t = softplus(w.x_t + b), one "
                         "linear layer per fast block, meta-learned as a slow parameter (LaCT Eq. 4). "
