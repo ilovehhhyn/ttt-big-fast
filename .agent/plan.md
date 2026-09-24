@@ -159,6 +159,12 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    Predictions: step-0 loss within 0.01 of the fp32 validation's 5.0223, step-5 loss within
    0.02 of 3.3282, step time under 200 s (fp32: 286 s). For the 2.4e-4 chain: loss under
    2.75 with TTT on (tested-only value 2.7937), recall at or above +1.40.
+9. Read 2026-09-24 05:40: the 2.4e-4 chain finished in its first link (bf16, 82 s per step,
+   peak 52.0 GiB): loss 2.7452 with TTT on (prediction under 2.75 met by 0.005), 2.8008 off.
+   Recall and the 2x2 partner are running (jobs 14360392 to 14360394). The 150-step control
+   at window 8192 could not be placed as a 4-GPU `gpu-test` job in 13 hours; cancelled and
+   resubmitted as a 2-GPU, 2-link chain under the same name (14360407, 14360408); the
+   login script for its 2x2 is still waiting for it.
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 
