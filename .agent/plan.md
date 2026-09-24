@@ -134,6 +134,10 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    14353810, 14353811). Predictions written before those land: interaction +0.02 to +0.04
    per book; recall of the Muon-trained weights +1.1 to +1.4; recall of the plain weights
    near +1.0 (the earlier +1.0241 was on weights trained through normalized SGD, not plain).
+5. Read 2026-09-24 01:35: recall of the Muon-trained weights +1.0006 [+0.9354, +1.0658],
+   20/20; paired against the normalized-SGD-trained weights under the same write, -0.0235
+   [-0.0295, -0.0175], 2/20 books. The recall prediction failed: meta-training through Muon
+   stores no more. The 2x2 is pending on job 14354267.
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 

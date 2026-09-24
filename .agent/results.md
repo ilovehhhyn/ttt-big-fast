@@ -81,6 +81,10 @@ rules that equalize the update".
 | 40 steps at 4e-6, tested at | Muon 1.2e-4 | +1.0241 | [+0.9555, +1.0927] | 2.6895 |
 | 40 steps at 4e-6, tested at | Muon 2.4e-4 | +1.5005 | [+1.3894, +1.6117] | 2.7937 |
 | 40 steps TRAINED at 2e-5 | normalized SGD 2e-5 | +0.5201 | [+0.4733, +0.5669] | 2.7243 |
+| 40 steps TRAINED THROUGH Muon 1.2e-4 | Muon 1.2e-4 | +1.0006 | [+0.9354, +1.0658] | 2.6762 (TTT off 2.7380) |
+
+Trained through Muon minus trained through normalized SGD, both scored with Muon 1.2e-4:
+recall -0.0235 [-0.0295, -0.0175], 2/20 books (R, "2026-09-24").
 
 Other recall facts: trained through the inner loop minus plain fine-tune +0.0036
 [+0.0018, +0.0053], 18/20 books; recall is flat along the passage (+0.0707, +0.0722, +0.0788,
@@ -118,6 +122,8 @@ the strongest direction carries 32 to 60% of the key energy and 64 directions ca
 | run-to-run noise, same config, different node | 2.49e-4 in loss | R, "Checkpoint / resume" |
 | 2 GPUs against 1 process, same global batch | largest loss difference 3.737e-04; 65.7 against 131.9 s per step | R, "Data parallelism over sequences" |
 | step time, window 1024, truncation 4, 4 sequences | 55 s (control 30 s); peak 42.0 GiB | R, "A smaller window affords a longer truncation window" |
+| step time, window 1024, truncation 4, trained THROUGH Muon | 301 s; peak 60.7 GiB | R, "2026-09-24" |
+| memory probe, chunk 2048, window 2048, truncation 2 (one sequence) | 49.73 GiB | R, "Memory at chunk 2048" |
 | step time, window 8192, truncation 2 | 131.9 s; peak 68 GiB | F section 13 |
 | Muon evaluation pass, A100 | 20 s per sequence against 3.4 | R, "Two write rules" |
 

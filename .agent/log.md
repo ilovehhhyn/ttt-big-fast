@@ -49,3 +49,11 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   (`--prime-intermediate`, `fast_init_trained`); 262 tests pass. Nothing measured on Llama:
   the Della SSH session lapsed at about 19:30 and did not come back during the session.
   choobi updated `.agent/README.md` (it cannot see `plan.md`); the rest by hand.
+- 2026-09-24. 00:59 Della back. The Muon 40-step run had finished: loss 2.6762 (TTT off
+  2.7380), recall +1.0006, against +1.0241 for the normalized-SGD-trained weights under the same
+  write (paired -0.0235, 2/20). Loss prediction met, recall prediction failed. The login node
+  killed the plain control's Muon evaluation at 13 minutes; it moved to `gpu-test`
+  (`recall_muon.sbatch` now also scores TTT off). Memory probe at chunk 2048: 49.73 GiB. The
+  trainer left 0.8 GiB of unused gradient on the fast weights every run; fixed. Queued: the
+  control's Muon cell, the bf16 and row-reset variants on the 40-step weights, the 150-step
+  control (gpu-test nodes unavailable overnight).

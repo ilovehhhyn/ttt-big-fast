@@ -1465,4 +1465,51 @@ use TTT better. On the plain weights TTT is worth only +0.0048 and is positive i
 books. Prediction for the 150-step 2x2, written before its control finished: interaction
 between +0.005 and +0.010; TTT on the plain weights below +0.005.
 
+## 2026-09-24: meta-training through Muon, and what it does not buy
 
+### The 40-step run through Muon
+
+Arm C at window 1024, `truncate_bptt=4`, 4 sequences per step, outer lr 4e-4, 40 steps, with
+Muon at 1.2e-4 as the inner rule DURING training (jobs 14333213 to 14333217, five 1-hour links
+on `gpu-test`; 301 s per step on an A100 against 55 for normalized SGD; peak 60.7 GiB). The
+learned step multipliers ended at 0.995 (min 0.994, max 0.996). Predictions written before the
+run (`.agent/plan.md`): loss at or below 2.6777 with TTT on; recall at or above +1.0241;
+interaction at least twice +0.0083.
+
+| weights (all scored with Muon 1.2e-4 at evaluation) | loss, TTT on | TTT off | recall | 95% CI | books positive |
+|---|---|---|---|---|---|
+| 40 steps trained THROUGH Muon 1.2e-4 (`C_32k_k1024_muon_s40`) | 2.6762 | 2.7380 | +1.0006 | [+0.9354, +1.0658] | 20/20 |
+| 40 steps trained through normalized SGD 4e-6 (`C_32k_k1024_t4_s40`, from "Two write rules") | 2.6895 | | +1.0241 | [+0.9555, +1.0927] | 20/20 |
+
+Paired on the same 32 planted passages, clustered by the 20 carrier books: trained through
+Muon minus trained through normalized SGD, recall -0.0235 [-0.0295, -0.0175], 2 of 20 books
+in favour of the Muon-trained weights.
+
+1. The loss prediction held by 0.0015 (2.6762 against the bound 2.6777). Training through
+   Muon lowers the loss under Muon by 0.013 against weights trained through normalized SGD.
+2. The recall prediction failed. Meta-training through the strong write rule does not
+   raise what the write stores; it lowers it slightly, in 18 of 20 books. What TTT is worth
+   on these weights, +0.0618 (2.7380 against 2.6762), is twice the +0.0309 of the weights
+   trained through normalized SGD, but that is the loss cost of switching a write off that the
+   slow weights were trained to expect, not more memory.
+3. By the rule written before the run, the recall half of "meta-learning adds nothing to a
+   strong fixed write rule" is met. The interaction half waits for the plain control scored
+   with Muon (job 14354267; its login-node evaluation was killed at the 13-minute limit).
+
+The Muon recall jobs did not repeat the no-TTT floor check (`exact_floor_checked` is false in
+their files); the floor is a property of attention's reach, not of the write rule, and was
+exact in every normalized-SGD run on the same pairs.
+
+### Memory at chunk 2048
+
+`scripts/memory_probe.py --chunk 2048 --window 2048 --prefix-segment 2048 --truncate-bptt 2
+--remat-blocks` (one sequence, no optimizer step, login GPU): peak 49.73 GiB, prefix 4.94 GiB
+resident. At window 8192 the trainer's peak was 18 GiB above the probe's, at window 1024 about
+0.6 GiB above; a validation job must measure the trainer's peak before any 40-step run.
+
+### An unused gradient buffer
+
+Every window's backward left d loss / d W_0 on the live fast parameters, which nothing read
+or zeroed: 201M floats, 0.8 GiB, resident for the whole run in every arm C job so far
+(commit d6dabb6 drops it after each sequence unless the fast init is trained). Numerics are
+unchanged; the saving is not yet measured on the cluster.
