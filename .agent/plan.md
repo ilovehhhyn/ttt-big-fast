@@ -188,7 +188,9 @@ LaCT is "Test-Time Training Done Right" (arXiv 2505.23884). A sub-agent read the
    Alg. 1 and 2). Under a normalized or Muon rule they only weight tokens against each other
    inside a chunk (LaCT Sec. 3.2). This is the cheaper form of "the LoRA weights the fast
    update" (the meta-learned preconditioner below). Built 2026-09-23 (`--token-rates`; eta = 1 at init, so a
-   fresh run equals one without the flag). Not yet run.
+   fresh run equals one without the flag). Run 2026-09-24, 40 steps under normalized SGD 4e-6:
+   loss unchanged (-0.0002 per book, 9/22), recall under Muon 1.2e-4 lower by 0.0172 (0/20).
+   Null at this budget; the untested case is rates learned through Muon.
 4. L2 row normalization: DONE and DROPPED 2026-09-24. At Muon 1.2e-4 and 4.8e-4 on the
    40-step weights the reset changes neither recall nor loss (R, "Muon at 4.8e-4"); forty
    steps of these sizes do not move a pretrained row's norm. `--weight-norm row_reset` stays
