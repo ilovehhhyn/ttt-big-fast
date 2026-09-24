@@ -42,6 +42,7 @@ __all__ = [
     "MuonNoMomentum",
     "PreconditionedSGD",
     "build_inner_optimizer",
+    "NEWTON_SCHULZ_DTYPES",
     "newton_schulz5",
 ]
 
@@ -266,27 +267,36 @@ class DifferentiableAdamW(InnerOptimizer):
         return new_fast, {"m": new_m, "v": new_v, "t": t, "bias_correct": state["bias_correct"]}
 
 
-def newton_schulz5(g: Tensor) -> Tensor:
+NEWTON_SCHULZ_DTYPES: dict[str, torch.dtype] = {"float32": torch.float32, "bfloat16": torch.bfloat16}
+
+
+def newton_schulz5(g: Tensor, *, iteration_dtype: str = "float32") -> Tensor:
     """5-step Newton-Schulz orthogonalisation of Keller Jordan's Muon.
 
         X = G / (||G||_F + 1e-7), transposed if rows > cols
         repeat 5x:  A = X X^T ; B = b*A + c*A@A ; X = a*X + B@X
         with (a, b, c) = (3.4445, -4.7750, 2.0315)
 
-    The quintic is applied in the input dtype (no bf16 downcast as in the reference
-    implementation): the outer loop differentiates through it twice, so precision here
-    is worth more than speed, and the fast-weight tensors are small.
+    The normalisation runs in the input dtype; the five rounds run in `iteration_dtype`
+    and the result is cast back, so the caller's dtype is returned either way. The outer
+    loop differentiates through the rounds twice, and the casts are differentiable.
+    Measured against float32 on a 2048 x 8192 matrix, bfloat16 differs by 1.9% in relative
+    Frobenius norm (2026-09-23).
     """
     assert g.ndim == 2, f"newton_schulz5 expects a 2-D tensor, got shape {tuple(g.shape)}"
+    assert iteration_dtype in NEWTON_SCHULZ_DTYPES, (
+        f"iteration_dtype={iteration_dtype!r}; must be one of {sorted(NEWTON_SCHULZ_DTYPES)}"
+    )
     a, b, c = 3.4445, -4.7750, 2.0315
 
     transposed = g.shape[0] > g.shape[1]
     x = g.mT if transposed else g
-    x = x / (x.reshape(-1).norm() + 1e-7)
+    x = (x / (x.reshape(-1).norm() + 1e-7)).to(NEWTON_SCHULZ_DTYPES[iteration_dtype])
     for _ in range(5):
         aa = x @ x.mT
         bb = b * aa + c * (aa @ aa)
         x = a * x + bb @ x
+    x = x.to(g.dtype)
     return x.mT if transposed else x
 
 
@@ -331,7 +341,7 @@ class MuonNoMomentum(InnerOptimizer):
             gate = (norm >= cfg.eps_norm).to(g.dtype)
             if g.ndim == 2:
                 scale = math.sqrt(float(max(g.shape[0], g.shape[1])))
-                new_fast[k] = w - lr * scale * gate * newton_schulz5(g)
+                new_fast[k] = w - lr * scale * gate * newton_schulz5(g, iteration_dtype=cfg.ns_dtype)
             else:
                 scale = math.sqrt(float(w.numel()))
                 new_fast[k] = w - lr * scale * _normalized_direction(g, norm, cfg.eps_norm)

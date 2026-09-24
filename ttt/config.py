@@ -125,6 +125,9 @@ class InnerConfig:
     adamw:           differentiated-through AdamW, moments warm-started from the
                      first chunk gradient; denominator sqrt(v_hat + eps^2).
     muon:            W <- W - lr_rms * sqrt(max(m,n)) * NewtonSchulz5(g)
+                     ns_dtype is the dtype of the five Newton-Schulz rounds only: float32
+                     (default) or bfloat16 (Keller Jordan's reference Muon). The gradient,
+                     the fast weights and the update stay in their own dtype.
     preconditioned_sgd:  normalized_sgd applied to D = g - (1 - shared_keep) * (g E) E^T, where the
                      columns of E [in, r] are the input ("key") directions that all tokens share
                      (scripts/key_basis.py). shared_keep = 1 is normalized_sgd exactly.
@@ -148,6 +151,7 @@ class InnerConfig:
     # still near zero. Kept configurable so the deviation is visible and testable.
     ilr_init: float = 0.1
     clip_tau: float = 1.0  # clipped_sgd only: global-norm clip threshold (e2e uses 1.0)
+    ns_dtype: Literal["float32", "bfloat16"] = "float32"  # muon only: dtype of the Newton-Schulz rounds
     # preconditioned_sgd only. A chunk gradient is G = sum_t d_t k_t^T (d_t: error at the matrix
     # output, k_t: its input, the "key"). Most of ||G||^2 lies in a few key directions shared by
     # all tokens; that part moves the output for every later token and caps the step size, while
@@ -163,6 +167,10 @@ class InnerConfig:
             "pass --key-basis, or drop the option"
         )
         assert 0.0 <= self.shared_keep <= 1.0, f"shared_keep must be in [0, 1], got {self.shared_keep}"
+        assert self.ns_dtype == "float32" or self.optimizer == "muon", (
+            f"ns_dtype={self.ns_dtype!r} with optimizer={self.optimizer!r}: only muon runs a Newton-Schulz "
+            "iteration; pass --inner muon or drop --ns-dtype"
+        )
         assert self.lr_rms >= 0.0
         assert 0.0 <= self.delta_decay < 1.0
         assert self.eps > 0.0 and self.eps_norm > 0.0

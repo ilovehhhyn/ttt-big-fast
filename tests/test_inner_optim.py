@@ -168,9 +168,9 @@ def _second_order_probe(cfg: InnerConfig, shape: tuple[int, ...]) -> tuple[torch
     return dg, dx
 
 
-@pytest.mark.parametrize("name", ["normalized_sgd", "adamw", "muon"])
-def test_second_order_flows(name: str) -> None:
-    cfg = InnerConfig(optimizer=name, lr_rms=1e-2, warm_start=True)
+@pytest.mark.parametrize("name, ns_dtype", [("normalized_sgd", "float32"), ("adamw", "float32"), ("muon", "float32"), ("muon", "bfloat16")])
+def test_second_order_flows(name: str, ns_dtype: str) -> None:
+    cfg = InnerConfig(optimizer=name, lr_rms=1e-2, warm_start=True, ns_dtype=ns_dtype)
     dg, dx = _second_order_probe(cfg, (6, 8))
 
     assert torch.isfinite(dg).all(), f"{name}: non-finite d loss/d g"
@@ -265,6 +265,52 @@ def test_newton_schulz_orthogonalises() -> None:
     # and it really did orthogonalise: the raw input is far from the band
     s_raw = torch.linalg.svdvals(g / g.reshape(-1).norm())
     assert (s_raw - 1.0).abs().max().item() > 0.7, s_raw
+
+
+def test_newton_schulz_bf16_iteration_matches_fp32_within_5_percent() -> None:
+    """Oracle: the fp32 iteration on the same input.
+
+    Invariant: the bf16 iteration returns the input dtype and lands within 5% relative
+    Frobenius error of the fp32 result, with singular values in the same band as test 7.
+    Witness: measured 0.0326 on this 64 x 128 draw and 0.0191 on the real 2048 x 8192 fast
+    matrix shape (2026-09-23); 0.05 is the tightest round bound above both.
+    """
+    gen = torch.Generator().manual_seed(3)
+    g = torch.randn(64, 128, generator=gen, dtype=torch.float32)
+
+    reference = newton_schulz5(g, iteration_dtype="float32")
+    low = newton_schulz5(g, iteration_dtype="bfloat16")
+
+    assert low.dtype == torch.float32, low.dtype
+    relative = ((low - reference).norm() / reference.norm()).item()
+    assert relative < 0.05, relative
+    # Control: the bf16 path really ran; a silent fp32 fallback would be bit-identical.
+    assert relative > 1e-4, relative
+    s = torch.linalg.svdvals(low)
+    assert (s - 1.0).abs().max().item() < 0.35, s
+
+
+def test_newton_schulz_rejects_an_unknown_iteration_dtype() -> None:
+    g = torch.randn(4, 8, dtype=DT)
+    with pytest.raises(AssertionError, match="iteration_dtype"):
+        newton_schulz5(g, iteration_dtype="float16")  # type: ignore[arg-type]  # the rejected case
+
+
+def test_inner_config_rejects_ns_dtype_without_muon() -> None:
+    with pytest.raises(AssertionError, match="ns_dtype.*muon"):
+        InnerConfig(optimizer="normalized_sgd", lr_rms=1e-2, ns_dtype="bfloat16")
+
+
+def test_muon_bf16_step_keeps_the_fast_weight_dtype() -> None:
+    cfg = InnerConfig(optimizer="muon", lr_rms=1e-2, ns_dtype="bfloat16")
+    opt = build_inner_optimizer(cfg)
+    fast = {"a": torch.randn(6, 8, dtype=torch.float32)}
+    grads = {"a": torch.randn(6, 8, dtype=torch.float32)}
+
+    new_fast, _ = opt.step(fast, grads, opt.init_state(fast))
+
+    assert new_fast["a"].dtype == torch.float32
+    assert abs(_rms(new_fast["a"] - fast["a"]) - cfg.lr_rms) < 0.15 * cfg.lr_rms
 
 
 def test_muon_rms_is_lr() -> None:
