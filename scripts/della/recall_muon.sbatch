@@ -50,6 +50,7 @@ run() {   # run <result name> <script and its arguments...>
   echo "[end]   $name $(date +%H:%M:%S)"
 }
 run "$RECALL_NAME" scripts/recall_probe.py $MODEL --source-start 2048 --length 1024 --cue 32 --gap 17408 --pairs 32
-run "$LOSS_NAME" -m ttt.run $MODEL --eval-sequences 32
+# --eval-ttt-off costs one cheap pass and makes the file a 2x2 cell (scripts/two_by_two.py needs both).
+run "$LOSS_NAME" -m ttt.run $MODEL --eval-sequences 32 --eval-ttt-off
 echo "=== recall_muon lr=$LR: failed=$failed ==="
 [ "$failed" -eq 0 ]
