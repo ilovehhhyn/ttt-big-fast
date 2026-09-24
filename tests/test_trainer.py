@@ -165,3 +165,16 @@ def test_fast_init_trained_moves_w0_and_the_inner_loop_still_starts_from_it():
     assert torch.isfinite(out.loss)
     for k, v in split.fast.items():
         assert not torch.equal(v, before_fast[k]), "run_sequence must read the live W_0"
+
+
+def test_untrained_fast_weights_carry_no_gradient_after_an_outer_step():
+    """W_0 is the live fast parameter, so every window's backward would leave a gradient on
+    it that nothing reads: 201M floats on Llama, held for the whole run. The trainer drops it
+    unless the fast init is trained, in which case the optimizer owns and zeroes it."""
+    cfg, model, split, loop, opt = build()
+    Trainer(cfg, model, split, loop, opt, batches(cfg), device=torch.device("cpu")).train_step(1)
+    assert all(v.grad is None for v in split.fast.values()), "gradient left on untrained fast weights"
+
+    cfg, model, split, loop, opt = build(fast_init_trained=True)
+    Trainer(cfg, model, split, loop, opt, batches(cfg), device=torch.device("cpu")).train_step(1)
+    assert all(v.grad is not None for v in split.fast.values())

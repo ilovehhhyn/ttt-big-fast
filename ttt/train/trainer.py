@@ -101,6 +101,12 @@ class Trainer:
                                          backward_scale=1.0 / self.seqs_per_step)
             if not out.backward_done:
                 (out.loss / self.seqs_per_step).backward()
+            if not self.split.fast_init_trained:
+                # W_0 is the live fast parameter, so the backward leaves d loss / d W_0 on it.
+                # Nothing reads that unless W_0 is trained: drop it now, or 201M floats on Llama
+                # sit on the card for the whole run.
+                for fast_param in self.split.fast.values():
+                    fast_param.grad = None
             total += out.loss.detach().item()
             if self.empty_cache:
                 # Each sequence's second-order graph is released by backward(), but the
