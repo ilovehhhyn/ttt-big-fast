@@ -152,6 +152,13 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
    token-rate run matches the plain 6-step run's step-0 loss exactly (eta = 1 at init) and
    costs under 10% more time; arm F fits under 40 GiB (fast set 50M) and its gate leaves 0
    within 6 steps; its inner rate needs its own sweep before any longer run.
+8. Read 2026-09-24 03:20: both validations fit (R, "Six-step validations"); the 40-step
+   token-rate run and the arm F pair are submitted (14357823 to 14357825). Row reset dropped
+   (item 4). A 6-step validation of bf16 Newton-Schulz DURING meta-training (14357884, Muon
+   1.2e-4) decides whether the next chain, meta-training through Muon at 2.4e-4, may use it.
+   Predictions: step-0 loss within 0.01 of the fp32 validation's 5.0223, step-5 loss within
+   0.02 of 3.3282, step time under 200 s (fp32: 286 s). For the 2.4e-4 chain: loss under
+   2.75 with TTT on (tested-only value 2.7937), recall at or above +1.40.
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 
