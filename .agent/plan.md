@@ -182,11 +182,10 @@ LaCT is "Test-Time Training Done Right" (arXiv 2505.23884). A sub-agent read the
    inside a chunk (LaCT Sec. 3.2). This is the cheaper form of "the LoRA weights the fast
    update" (the meta-learned preconditioner below). Built 2026-09-23 (`--token-rates`; eta = 1 at init, so a
    fresh run equals one without the flag). Not yet run.
-4. L2 row normalization of the fast weights after each inner step, no weight decay (LaCT
-   Alg. 1 and 3, Sec. 3.2: each row of W - g is rescaled to the row norm of W). Test first at
-   evaluation time on the existing 40-step weights with the recall test. The hope is a larger
-   stable inner rate, which caps every memory result so far. Built 2026-09-23
-   (`--weight-norm row_reset`). Not yet run.
+4. L2 row normalization: DONE and DROPPED 2026-09-24. At Muon 1.2e-4 and 4.8e-4 on the
+   40-step weights the reset changes neither recall nor loss (R, "Muon at 4.8e-4"); forty
+   steps of these sizes do not move a pretrained row's norm. `--weight-norm row_reset` stays
+   as an explicit opt-in.
 5. The bf16 Newton-Schulz iteration, built 2026-09-23 (`--ns-dtype bfloat16`; default
    float32 unchanged). On a 2048 x 8192 matrix it differs from the fp32 iteration by 1.9% in
    relative Frobenius norm (singular values [0.673, 1.137] against [0.682, 1.134]). Helen

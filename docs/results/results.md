@@ -1579,3 +1579,54 @@ reset has nothing to undo. Its purpose is a larger stable step. Prediction, writ
 jobs 14356889 (plain rows) and 14356890 (row reset) at Muon 4.8e-4 (both bf16): without the reset the loss rises above 2.9 or the
 run becomes unstable; with the reset the loss stays under 2.85 and recall exceeds +1.5005
 (the 2.4e-4 value).
+
+### Muon at 4.8e-4, with and without the row reset: the reset does nothing
+
+Same 40-step weights (`C_32k_k1024_t4_s40`), Muon at 4.8e-4 in bf16, jobs 14356889 (plain rows)
+and 14356890 (`--weight-norm row_reset`), 32 pairs and 32 sequences. Prediction on record:
+without the reset the loss rises above 2.9; with it the loss stays under 2.85 and recall passes
++1.5005.
+
+| Muon rate | row reset | recall | 95% CI | loss, TTT on | TTT off | share of full attention (+2.6920) |
+|---|---|---|---|---|---|---|
+| 1.2e-4 | no | +1.0241 | [+0.9555, +1.0927] | 2.6895 | 2.7086 | 38% |
+| 2.4e-4 | no | +1.5005 | [+1.3894, +1.6117] | 2.7937 | | 56% |
+| 4.8e-4 | no | +1.9159 | [+1.7622, +2.0697] | 3.0559 | 2.7086 | 71% |
+| 4.8e-4 | yes | +1.9152 | [+1.7616, +2.0688] | 3.0542 | 2.7086 | 71% |
+
+1. The first half of the prediction held (3.0559 is above 2.9) and the second failed: the row
+   reset changes neither recall nor loss at 4.8e-4, as it did not at 1.2e-4. Forty steps of
+   per-element RMS 4.8e-4 do not move a pretrained row's norm enough for a reset to matter;
+   the loss cost of a large write is not norm drift. The option stays in the code as an
+   explicit opt-in and leaves the plan.
+2. Recall keeps rising with the step, to 71% of full attention, while the loss cost grows from
+   +0.012 (1.2e-4) to +0.104 (2.4e-4) to +0.366 (4.8e-4) on weights that never saw these steps
+   in training. Training at 2e-5 removed most of the loss cost of that step for normalized SGD
+   (2.7243 against 2.8318); the same test for Muon at 2.4e-4 is the next chain.
+
+### Six-step validations: per-token rates and arm F fit and run at the plain step time
+
+Window 1024, `truncate_bptt=4`, normalized SGD 4e-6, 6 steps of 4 sequences, 4 evaluation
+sequences, one A100 each (jobs 14356891, 14356892).
+
+| run | fast | slow | outer | step 0 loss | s per step | peak | TTT on / off (4 sequences) |
+|---|---|---|---|---|---|---|---|
+| arm C `--token-rates` | 201,326,592 | 45,164,560 | 45,164,560 | 5.066569 | 54.7 | 42.2 GiB | 3.2936 / 3.3638 |
+| arm C plain (`C_32k_k1024_t4_s40`, same first step) | 201,326,592 | 45,156,364 | 45,156,364 | 5.066569 | 55 | 42.0 GiB | |
+| arm F `--prime-intermediate 2048` | 50,331,648 | 45,172,752 | 95,504,400 | 5.218563 | 53.0 | 36.2 GiB | 3.4729 / 3.4737 |
+
+1. The token-rate run's step-0 loss equals the plain run's to every printed digit, as
+   predicted (eta = 1 at init); the rates cost no time; after 6 steps the rate weights have
+   norm 0.03 per block (checkpoint read), so they are learning.
+2. Arm F's parameter counts are the designed ones (3 x 2048 x 2048 x 4 fast; 4 gates and 8
+   norm gains added to the slow set; outer = slow + fast). Its gates left zero but only to
+   +-0.001 after 6 steps, so the prime MLP contributes nothing yet (TTT on against off
+   +0.0008). At the outer rate of 4e-4 under AdamW a gate moves at most about 4e-4 per step,
+   so 40 steps reach about 0.016. The 40-step pair will show whether that is enough; if not,
+   the gate needs its own learning rate or a small nonzero init, a deliberate deviation from
+   LaCT's zero init that would be recorded as such.
+3. Submitted on `gpu-test` at 03:20: `C_32k_k1024_tokrates_s40` (against `C_32k_k1024_t4_s40`,
+   same data and schedule, then recall), `F_32k_k1024_s40` and its `--inner none` control
+   `F_32k_k1024_ctl_s40` (jobs 14357823 to 14357825). Predictions: token rates lower the
+   40-step loss against the plain run by 0.002 to 0.01 per book and raise recall by under
+   0.02; arm F's gates end near 0.016 and its TTT effect is under +0.005.

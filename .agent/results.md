@@ -83,6 +83,8 @@ rules that equalize the update".
 | 40 steps at 4e-6, tested at | Muon 2.4e-4 | +1.5005 | [+1.3894, +1.6117] | 2.7937 |
 | 40 steps TRAINED at 2e-5 | normalized SGD 2e-5 | +0.5201 | [+0.4733, +0.5669] | 2.7243 |
 | 40 steps TRAINED THROUGH Muon 1.2e-4 | Muon 1.2e-4 | +1.0006 | [+0.9354, +1.0658] | 2.6762 (TTT off 2.7380) |
+| 40 steps at 4e-6, tested at | Muon 4.8e-4 (bf16) | +1.9159 | [+1.7622, +2.0697] | 3.0559 |
+| 40 steps at 4e-6, tested at, row reset on | Muon 4.8e-4 (bf16) | +1.9152 | [+1.7616, +2.0688] | 3.0542 |
 
 Trained through Muon minus trained through normalized SGD, both scored with Muon 1.2e-4:
 recall -0.0235 [-0.0295, -0.0175], 2/20 books (R, "2026-09-24").
