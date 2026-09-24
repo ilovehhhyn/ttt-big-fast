@@ -48,11 +48,14 @@ inner loop, captures most of what test-time training can give. The code is PyTor
 7. We have not matched TTT-E2E's headline: they report parity with full attention at 32K after
    725 steps of 32 sequences. Our runs used 300 to 600x less training. Matched-budget runs
    are queued (about a week's wait).
-8. At the reference window (8192) the prize stays small however long the LoRA trains: what
-   TTT adds on the same weights falls from +0.0248 at 8 steps to +0.0067 at 150 steps, under
-   the +0.0208 ceiling.
-9. Next: meta-train the LoRA through Muon for 40 steps with its control, then rerun the recall
-   test and the 2x2 (`plan.md`, "Next experiment").
+8. At the reference window (8192), the 60-step 2x2 interaction is +0.0077 [+0.0058, +0.0096]
+   across 21/22 books. What TTT adds on the same weights falls from +0.0248 at 8 steps to
+   +0.0067 at 150 steps, under the +0.0208 ceiling.
+9. Next: finish the running 40-step Muon meta-training run and its control, then test five LaCT
+   ideas: a 2048-token chunk arm with Muon's roughly 3400-token cost break-even included in the
+   comparison; arm F with RMSNorm on the fast output and a zero-initialized gate; per-token
+   meta-learned learning rates; and L2 row normalization without weight decay, first at evaluation
+   time with the recall test. The bf16 Newton-Schulz iteration is deferred.
 10. The Della SSH session lapses often. Only Helen can sign in; never enter her password.
 
 ## Where things live
@@ -85,6 +88,8 @@ inner loop, captures most of what test-time training can give. The code is PyTor
   Cluster paired differences by document before quoting an interval.
 - State a prediction before a result comes back, and run the control that could undercut a
   headline number.
+- Do not adopt the bf16 Newton-Schulz iteration until its speed gain is measured. On a
+  2048 x 8192 matrix it differs from fp32 by 1.9% in relative Frobenius norm.
 - Write in plain textbook English. Load the `mdx` skill before touching code or docs.
 
 What this folder does not do: it does not repeat `docs/results/results.md`. Every number here
