@@ -49,6 +49,7 @@ context is worth most".
 | window 8192, 60 steps | 2.5146 / 2.5294 | 2.5187 / 2.5255 | +0.0077 | [+0.0058, +0.0096] | 21/22 | "The 2x2 at window 8192, 60 steps" |
 | window 1024, 10 steps | 2.9440 / 3.0041 | 3.0212 / 3.0682 | +0.0126 | [+0.0098, +0.0153] | 22/22 | "Arm C at k = 1024, 10 steps" |
 | window 1024, 40 steps | 2.6777 / 2.7086 | 2.6979 / 2.7196 | +0.0083 | [+0.0062, +0.0104] | 22/22 | "Arm C at k = 1024, 40 steps" |
+| window 1024, 40 steps, Muon 1.2e-4 in training AND evaluation | 2.6762 / 2.7380 | 2.7079 / 2.7196 | +0.0492 | [+0.0457, +0.0527] | 22/22 | "The 2x2 under Muon"; mostly dependence: meta minus plain is +0.0291 with TTT on and -0.0201 with it off |
 | SlimPajama, window 1024, 40 steps, 96 sequences | 2.2789 / 2.3193 | 2.2920 / 2.3252 | +0.0074 | [+0.0056, +0.0091] | 85/88 | "SlimPajama at k = 1024" |
 
 From 10 to 40 steps at window 1024 every effect shrank; the interaction least (-34%), the

@@ -137,7 +137,14 @@ either H1 is wrong, or the write was too weak for the slow weights to have anyth
 5. Read 2026-09-24 01:35: recall of the Muon-trained weights +1.0006 [+0.9354, +1.0658],
    20/20; paired against the normalized-SGD-trained weights under the same write, -0.0235
    [-0.0295, -0.0175], 2/20 books. The recall prediction failed: meta-training through Muon
-   stores no more. The 2x2 is pending on job 14354267.
+   stores no more.
+6. Read 2026-09-24 02:20: the 2x2 under Muon. Interaction +0.0492 [+0.0457, +0.0527], 22/22
+   (predicted +0.02 to +0.04). Parts: meta minus plain +0.0291 with the write on, -0.0201
+   with it off; on plain weights Muon is worth only +0.0098 (12/22). Decision: at this
+   budget, meta-learning through the strong write improves the LOSS the write buys (+0.0291
+   over plain fine-tuning under the same write) and not the MEMORY (recall -0.0235). The
+   next test of H1 is therefore a memory test that the slow weights can influence: the
+   per-token rates (built) and arm F, scored by recall, not by loss alone.
 
 ## Planned after that, in order (Helen's order, decided 2026-09-23 from a reading of LaCT)
 

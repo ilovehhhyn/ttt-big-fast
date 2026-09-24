@@ -1493,8 +1493,44 @@ in favour of the Muon-trained weights.
    trained through normalized SGD, but that is the loss cost of switching a write off that the
    slow weights were trained to expect, not more memory.
 3. By the rule written before the run, the recall half of "meta-learning adds nothing to a
-   strong fixed write rule" is met. The interaction half waits for the plain control scored
-   with Muon (job 14354267; its login-node evaluation was killed at the 13-minute limit).
+   strong fixed write rule" is met. The interaction half is below.
+
+### The 2x2 under Muon, 40 steps, window 1024
+
+The plain 40-step control (`C_32k_k1024_ctl_s40`, trained with `--inner none`) scored with Muon
+1.2e-4 on and off on `gpu-test` (job 14354267, file `C_32k_k1024_ctl_s40_muon_evallr1.2e-4`);
+its TTT-off loss reproduced the control's own 2.7196. `scripts/two_by_two.py`, 32 sequences,
+22 books. Prediction written before the cell landed: interaction +0.02 to +0.04.
+
+| slow weights | TTT on at eval (Muon 1.2e-4) | TTT off |
+|---|---|---|
+| trained through the inner loop (Muon 1.2e-4) | 2.6762 | 2.7380 |
+| plain fine-tune | 2.7079 | 2.7196 |
+
+| effect, per book (22 books) | normalized SGD 4e-6, 40 steps (from 2026-09-21) | Muon 1.2e-4, 40 steps | 95% CI under Muon | books positive |
+|---|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0278 | +0.0590 | [+0.0474, +0.0705] | 22/22 |
+| TTT at eval, plain fine-tuned weights | +0.0195 | +0.0098 | [-0.0024, +0.0219] | 12/22 |
+| training with TTT, evaluated with TTT | +0.0179 | +0.0291 | [+0.0245, +0.0336] | 22/22 |
+| training with TTT, evaluated without | +0.0096 | -0.0201 | [-0.0239, -0.0164] | 1/22 |
+| INTERACTION | +0.0083 | +0.0492 | [+0.0457, +0.0527] | 22/22 |
+
+1. The interaction is six times its normalized-SGD value and above the predicted range. Read
+   with its parts, it is mostly dependence, not memory: the weights trained through Muon are
+   WORSE than the plain weights when the write is switched off (-0.0201, 21 of 22 books the
+   other way), and better by +0.0291 when it is on. A strong write during training makes the
+   slow weights rely on it; the loss they reach with it is 0.029 below what plain fine-tuning
+   reaches under the same write, on a model still above the healthy level for this window
+   (about 2.39).
+2. On plain fine-tuned weights Muon at 1.2e-4 is worth only +0.0098 and is not clearly
+   different from zero (12 of 22 books), against +0.0195 for normalized SGD at 4e-6 on the same
+   weights: the large step that stores most is not the step that repairs the window best, and
+   it takes the slow weights to make it pay in loss.
+3. Together with the recall result above: training through Muon teaches the slow weights to
+   USE a strong write for the next-token loss (+0.0291 over plain, 22/22) without making the
+   write STORE more (recall -0.0235 against the normalized-SGD-trained weights). The thesis
+   that a small slow set captures most of what test-time training can give is, at this budget,
+   supported for loss and not for memory.
 
 The Muon recall jobs did not repeat the no-TTT floor check (`exact_floor_checked` is false in
 their files); the floor is a property of attention's reach, not of the write rule, and was
