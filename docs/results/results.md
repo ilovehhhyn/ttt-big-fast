@@ -1717,3 +1717,57 @@ same write, -0.0172 [-0.0202, -0.0142], 0 of 20 books. Rates learned under norma
 4e-6 do not help a Muon write and slightly hurt it. Together with the unchanged loss: at this
 budget and rate the per-token weighting is a null result. Not tested: rates learned THROUGH
 Muon, where the weighting is the only thing the rule leaves free.
+
+### Meta-training through Muon at 2.4e-4: the loss cost of the strong write is paid back, the recall is not raised
+
+`C_32k_k1024_muon24_s40` (jobs 14359068, 14359069; 40 steps through Muon 2.4e-4 in bf16, 78 s
+per step, peak 52.0 GiB, one 1-hour link). Everything below is scored with Muon 2.4e-4 in bf16
+on the same 32 sequences and 32 planted passages (jobs 14360392 to 14360394). Predictions on
+record: loss under 2.75 with TTT on; recall at or above +1.40.
+
+| weights | trained through | loss, TTT on | TTT off | recall | 95% CI |
+|---|---|---|---|---|---|
+| `C_32k_k1024_muon24_s40` | Muon 2.4e-4 | 2.7452 | 2.8008 | +1.4570 | [+1.3583, +1.5556] |
+| `C_32k_k1024_t4_s40` | normalized SGD 4e-6 | 2.7937 | 2.7086 | +1.5010 | [+1.3898, +1.6122] |
+| `C_32k_k1024_ctl_s40` | plain fine-tune | 2.8106 | 2.7196 | +1.4974 | [+1.3842, +1.6106] |
+
+Both predictions held (2.7452 against 2.75; +1.4570 against +1.40). The 2x2 per book:
+
+| effect, per book (22 books) | Muon 1.2e-4 (above) | Muon 2.4e-4 | 95% CI | books |
+|---|---|---|---|---|
+| TTT at eval, weights trained with TTT | +0.0590 | +0.0534 | [+0.0400, +0.0669] | 22/22 |
+| TTT at eval, plain fine-tuned weights | +0.0098 | -0.0905 | [-0.1059, -0.0751] | 0/22 |
+| training with TTT, evaluated with TTT | +0.0291 | +0.0628 | [+0.0578, +0.0678] | 22/22 |
+| training with TTT, evaluated without | -0.0201 | -0.0811 | [-0.0850, -0.0773] | 0/22 |
+| INTERACTION | +0.0492 | +0.1439 | [+0.1365, +0.1514] | 22/22 |
+
+Recall paired on the same passages: trained through Muon minus plain, -0.0404 [-0.0679,
+-0.0130], 4 of 20 books; minus the normalized-SGD-trained weights, -0.0440 [-0.0688,
+-0.0192], 3 of 20; normalized-SGD-trained minus plain, +0.0036 [-0.0045, +0.0116], 12 of 20.
+
+1. At 2.4e-4 the strong write HURTS plain fine-tuned weights (-0.0905, 0 of 22 books) and
+   helps weights trained through it (+0.0534, 22 of 22). Training through the write is what
+   makes it usable: the loss with the write on falls from 2.8106 (plain) and 2.7937 (trained
+   through the weak write) to 2.7452, at a recall of +1.4570, 54% of full attention. That is
+   the loss-memory trade the project was after: against the 1.2e-4 weights (2.6762, +1.0006)
+   it buys +0.46 nats of recall for +0.069 in loss.
+2. The interaction of +0.1439 is, as at 1.2e-4, dependence: with the write off the
+   Muon-trained weights are 0.081 worse than plain. The number to quote for H1 is the row
+   "training with TTT, evaluated with TTT": +0.0628 [+0.0578, +0.0678], 22/22, twice its
+   1.2e-4 value.
+3. Meta-training again lowers verbatim recall a little (by 0.04, 3 to 4 of 20 books in
+   favour) while lowering the loss. Whatever the slow weights learn to do with the write, it
+   is not to store more of a planted passage; it is to make the written weights better for
+   the next tokens. The loss-difference recall test and the loss agree on this at both rates.
+
+Loss against recall so far, all on the same 32 sequences and passages (window 1024, 40 steps):
+
+| write at evaluation | weights | loss, TTT on | recall | share of full attention |
+|---|---|---|---|---|
+| normalized SGD 4e-6 | trained through it | 2.6777 | +0.1054 | 4% |
+| Muon 1.2e-4 | trained through normalized SGD 4e-6 | 2.6895 | +1.0241 | 38% |
+| Muon 1.2e-4 | trained through it | 2.6762 | +1.0006 | 37% |
+| Muon 2.4e-4 | trained through normalized SGD 4e-6 | 2.7937 | +1.5010 | 56% |
+| Muon 2.4e-4 | trained through it | 2.7452 | +1.4570 | 54% |
+| Muon 4.8e-4 | trained through normalized SGD 4e-6 | 3.0559 | +1.9159 | 71% |
+| full attention, no TTT | un-tuned | 2.3092 | +2.6920 | 100% |

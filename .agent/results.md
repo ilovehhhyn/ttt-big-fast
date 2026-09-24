@@ -50,6 +50,7 @@ context is worth most".
 | window 1024, 10 steps | 2.9440 / 3.0041 | 3.0212 / 3.0682 | +0.0126 | [+0.0098, +0.0153] | 22/22 | "Arm C at k = 1024, 10 steps" |
 | window 1024, 40 steps | 2.6777 / 2.7086 | 2.6979 / 2.7196 | +0.0083 | [+0.0062, +0.0104] | 22/22 | "Arm C at k = 1024, 40 steps" |
 | window 1024, 40 steps, Muon 1.2e-4 in training AND evaluation | 2.6762 / 2.7380 | 2.7079 / 2.7196 | +0.0492 | [+0.0457, +0.0527] | 22/22 | "The 2x2 under Muon"; mostly dependence: meta minus plain is +0.0291 with TTT on and -0.0201 with it off |
+| window 1024, 40 steps, Muon 2.4e-4 in training AND evaluation | 2.7452 / 2.8008 | 2.8106 / 2.7196 | +0.1439 | [+0.1365, +0.1514] | 22/22 | "Meta-training through Muon at 2.4e-4"; meta minus plain +0.0628 with TTT on, -0.0811 off; recall +1.4570 |
 | SlimPajama, window 1024, 40 steps, 96 sequences | 2.2789 / 2.3193 | 2.2920 / 2.3252 | +0.0074 | [+0.0056, +0.0091] | 85/88 | "SlimPajama at k = 1024" |
 
 From 10 to 40 steps at window 1024 every effect shrank; the interaction least (-34%), the
@@ -83,6 +84,8 @@ rules that equalize the update".
 | 40 steps at 4e-6, tested at | Muon 2.4e-4 | +1.5005 | [+1.3894, +1.6117] | 2.7937 |
 | 40 steps TRAINED at 2e-5 | normalized SGD 2e-5 | +0.5201 | [+0.4733, +0.5669] | 2.7243 |
 | 40 steps TRAINED THROUGH Muon 1.2e-4 | Muon 1.2e-4 | +1.0006 | [+0.9354, +1.0658] | 2.6762 (TTT off 2.7380) |
+| 40 steps TRAINED THROUGH Muon 2.4e-4 | Muon 2.4e-4 (bf16) | +1.4570 | [+1.3583, +1.5556] | 2.7452 (TTT off 2.8008) |
+| 40 steps plain fine-tune, tested at | Muon 2.4e-4 (bf16) | +1.4974 | [+1.3842, +1.6106] | 2.8106 |
 | 40 steps at 4e-6, tested at | Muon 4.8e-4 (bf16) | +1.9159 | [+1.7622, +2.0697] | 3.0559 |
 | 40 steps at 4e-6, tested at, row reset on | Muon 4.8e-4 (bf16) | +1.9152 | [+1.7616, +2.0688] | 3.0542 |
 
