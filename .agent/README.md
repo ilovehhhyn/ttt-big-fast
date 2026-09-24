@@ -29,34 +29,40 @@ fast tensor (45M parameters). The thesis (H1) is that this small slow set, train
 inner loop, captures most of what test-time training can give. The code is PyTorch
 (`ttt/`), the cluster is Princeton Della, all data is free.
 
-## The state in ten lines (2026-09-23)
+## The state in ten lines (2026-09-24)
 
 1. The sliding window breaks the pretrained model: loss 2.3092 with full attention, 3.7119
    at window 8192, 4.9895 at window 1024 (32K tokens, PG-19). Most of what TTT gains on the
    un-tuned model repairs that damage; old context is worth only +0.0208 nats at window 8192.
-2. The thesis is weakly supported. Training the LoRA through the inner loop makes TTT more
-   useful in 22/22 books, but by +0.0083 nats (0.3% of the loss) after 40 steps.
-3. A recall test (plant a passage, repeat it past attention's reach) measures memory directly.
-   With the original write rule TTT stores 4% of what full attention recalls.
-4. The write is weak because the gradient is dominated by a few input directions shared by all
-   tokens, which caps the step size. Two write rules that spread the update evenly fix this.
-5. Muon (all singular values of the gradient set to 1) at a 30x larger step raises recall to
-   38% of full attention on the 40-step weights (+1.0241 against +0.1054), at almost the same
-   loss (2.6895 against 2.6777).
-6. The inner learning rate that is best for loss (4e-6 to 7e-6) is far below the rate that is
-   best for memory; training at a larger rate keeps the memory at no cost in loss.
-7. We have not matched TTT-E2E's headline: they report parity with full attention at 32K after
-   725 steps of 32 sequences. Our runs used 300 to 600x less training. Matched-budget runs
-   are queued (about a week's wait).
-8. At the reference window (8192), the 60-step 2x2 interaction is +0.0077 [+0.0058, +0.0096]
-   across 21/22 books. What TTT adds on the same weights falls from +0.0248 at 8 steps to
-   +0.0067 at 150 steps, under the +0.0208 ceiling.
-9. Next: finish the running 40-step Muon meta-training run and its control, then test five LaCT
-   ideas: a 2048-token chunk arm with Muon's roughly 3400-token cost break-even included in the
-   comparison; arm F with RMSNorm on the fast output and a zero-initialized gate; per-token
-   meta-learned learning rates; and L2 row normalization without weight decay, first at evaluation
-   time with the recall test. The bf16 Newton-Schulz iteration is deferred.
-10. The Della SSH session lapses often. Only Helen can sign in; never enter her password.
+2. The thesis is supported for loss, not memory, at this budget. After 40 meta-training steps
+   through Muon, loss is 2.6762 with TTT on, meeting the prediction of at most 2.6777, and
+   2.7380 with it off.
+3. Muon recall is +1.0006 [+0.9354, +1.0658], against +1.0241 for weights trained through
+   normalized SGD under the same Muon write. The paired per-book difference is -0.0235
+   [-0.0295, -0.0175], with 2 of 20 books positive, so meta-training through the strong write
+   does not store more.
+4. The Muon 2x2 interaction is +0.0492 [+0.0457, +0.0527] in 22/22 books, six times the
+   +0.0083 under normalized SGD. This is mostly dependence: the meta-trained weights are worse
+   than plain fine-tuning with the write off (-0.0201) and better with it on (+0.0291).
+5. A recall test (plant a passage, repeat it past attention's reach) measures memory directly.
+   Muon at a 30x larger step raises recall to 38% of full attention on the 40-step normalized-SGD
+   weights (+1.0241 against +0.1054 for the original write), at almost the same loss (2.6895
+   against 2.6777).
+6. bf16 Newton-Schulz is adopted. Recall is +1.0239 against +1.0241 for fp32, with a paired
+   difference of -0.0003, and loss is 2.6895 for both. It makes the recall test 3.9x faster and
+   loss evaluation 2.0x faster; every Muon evaluation now passes `--ns-dtype bfloat16`.
+7. The inner learning rate that is best for loss (4e-6 to 7e-6) is far below the rate that is
+   best for memory; training at a larger rate keeps the memory at no cost in loss. Row reset at
+   1.2e-4 changes nothing (-0.0006); its 4.8e-4 Muon test is queued with and without reset
+   (jobs 14356889 and 14356890).
+8. We have not matched TTT-E2E's headline: they report parity with full attention at 32K after
+   725 steps of 32 sequences. Our runs used 300 to 600x less training. The 150-step plain control
+   at window 8192 (14330259) is pending, and `C32k_bs32s60` is running.
+9. Next: score the six-step `--token-rates` validation (14356891) and arm F (14356892) by the
+   recall test, not by loss alone; run the 4.8e-4 row-reset test; then run the chunk-2048 arm,
+   whose memory probe used 49.73 GiB for one sequence.
+10. Muon evaluations exceed the login node's 13-minute limit and run on `gpu-test`. The Della
+    SSH session lapses often; only Helen can sign in, so never enter her password.
 
 ## Where things live
 
@@ -88,8 +94,7 @@ inner loop, captures most of what test-time training can give. The code is PyTor
   Cluster paired differences by document before quoting an interval.
 - State a prediction before a result comes back, and run the control that could undercut a
   headline number.
-- Do not adopt the bf16 Newton-Schulz iteration until its speed gain is measured. On a
-  2048 x 8192 matrix it differs from fp32 by 1.9% in relative Frobenius norm.
+- Use bf16 Newton-Schulz for every Muon evaluation by passing `--ns-dtype bfloat16`.
 - Write in plain textbook English. Load the `mdx` skill before touching code or docs.
 
 What this folder does not do: it does not repeat `docs/results/results.md`. Every number here
