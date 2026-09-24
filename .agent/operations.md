@@ -26,6 +26,10 @@ week. The cluster rules are hard rules; each one is an incident.
   work, and waits for other login scripts by `pgrep` (a `pgrep -f NAME || launch` on the SAME ssh
   command line matches itself and skips the launch; launch unguarded).
 - Never run the test suite or uncapped CPU PyTorch there. Cap threads: `OMP_NUM_THREADS=4`.
+- A Muon evaluation of 32 sequences with `--eval-ttt-off` does NOT fit the 13-minute limit
+  (killed at 780 s on 2026-09-24, job `cell_k1024_plainft_40_muon`; the fp32 Newton-Schulz
+  rounds are not faster on the login H100 PCIe). Muon evaluations and every recall test go
+  through `recall_muon.sbatch` on `gpu-test`.
 - Never hold an SSH session open with `until`/`sleep` loops. Poll with short commands. Put any
   wait-then-act sequence inside a detached script on Della.
 
