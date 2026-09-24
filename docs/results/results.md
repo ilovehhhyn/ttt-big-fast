@@ -1630,3 +1630,43 @@ sequences, one A100 each (jobs 14356891, 14356892).
    `F_32k_k1024_ctl_s40` (jobs 14357823 to 14357825). Predictions: token rates lower the
    40-step loss against the plain run by 0.002 to 0.01 per book and raise recall by under
    0.02; arm F's gates end near 0.016 and its TTT effect is under +0.005.
+
+### Forty steps with per-token rates: no change in loss
+
+`C_32k_k1024_tokrates_s40` (job 14357823): arm C at window 1024 with `--token-rates`, otherwise
+the settings and data order of `C_32k_k1024_t4_s40`; 54.2 s per step, peak 42.2 GiB. Prediction
+on record: 0.002 to 0.01 lower loss per book. Observed: TTT on 2.6780 against 2.6777, TTT off
+2.7077 against 2.7086; paired per book -0.0002 [-0.0010, +0.0005], 9 of 22 books. The rate
+weights reached norm 0.03 per block and the learned step multipliers spread to [0.994, 1.007].
+The prediction failed: under normalized SGD at 4e-6 the learned per-token weighting does not
+change the loss. Its recall is pending (job 14359038, Muon 1.2e-4 in bf16 with the rates on).
+
+### Forty steps of arm F: the zero gate never opens
+
+`F_32k_k1024_s40` and its `--inner none` control `F_32k_k1024_ctl_s40` (jobs 14357824,
+14357825): prime MLP of width 2048, output RMSNorm, gate at 0, normalized SGD 4e-6 on the prime
+weights, the prime W_0 trained by the outer loop; 53.5 and 29.3 s per step; peak 36.2 GiB.
+
+| arm F, 40 steps | TTT on | TTT off | gate mean at step 39 |
+|---|---|---|---|
+| trained through the inner loop | 2.7161 | 2.7176 | -0.00015 (min -0.0007) |
+| plain (`--inner none`) | | 2.7188 | -0.00010 |
+
+Paired per book: TTT on against off +0.0013 [+0.0009, +0.0018], 22/22; against the control
++0.0023 [+0.0014, +0.0031], 22/22. Both are real and both are tiny: with the gate at 1e-4 the
+prime MLP is silent and the numbers are the LoRA's. The gate does not open because the prime
+MLP starts as noise, so opening it raises the loss, while the prime MLP gets no gradient
+until it opens. LaCT trains through this from scratch over tens of billions of tokens; forty
+steps of four sequences cannot. Deviation recorded: `--prime-gate-init` (commit on
+2026-09-24) starts the gates at a chosen value; the next pair uses 0.1. Prediction: with the
+gate at 0.1 the prime W_0 moves, arm F's TTT effect exceeds +0.005, and its loss stays within
+0.01 of the plain arm C level (2.6979 with the write on).
+
+### bf16 Newton-Schulz during meta-training: adopted
+
+6-step validation (job 14357884; Muon 1.2e-4, window 1024, `truncate_bptt=4`) against the fp32
+validation (job 14330856): step-0 loss 5.022287 against 5.022278, step-5 loss 3.328198 against
+3.328211, evaluation on 4 sequences 3.2629 against 3.2628; 81.6 s per step against 286 (3.5x);
+peak 52.0 against 60.4 GiB. All three predictions held. The 40-step chain through Muon at 2.4e-4
+in bf16 is submitted as two 1-hour links (jobs 14359068, 14359069); predictions in
+`.agent/plan.md`.

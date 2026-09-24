@@ -57,3 +57,9 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   trainer left 0.8 GiB of unused gradient on the fast weights every run; fixed. Queued: the
   control's Muon cell, the bf16 and row-reset variants on the 40-step weights, the 150-step
   control (gpu-test nodes unavailable overnight).
+  02:00 to 04:30: 2x2 under Muon, interaction +0.0492 (mostly dependence); bf16 Newton-Schulz
+  same numbers and 2 to 4x faster at evaluation, 3.5x in meta-training: adopted. Row reset:
+  nothing at 1.2e-4 or 4.8e-4: dropped. Muon 4.8e-4 recalls 71% of full attention at loss
+  3.06. Token rates: no loss change in 40 steps. Arm F: zero gate never opens; gate init flag
+  added. Literature read on how the field measures (loss first, needles second). Chain
+  through Muon 2.4e-4 submitted.
