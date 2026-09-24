@@ -15,6 +15,13 @@ week. The cluster rules are hard rules; each one is an incident.
   internet on compute nodes; set `HF_HUB_OFFLINE=1` in jobs (the sbatch scripts do).
 - Interpreters: `/opt/anaconda3/bin/python3` on the laptop, `.venv/bin/python` with
   `PYTHONPATH=$PWD` on Della. Plain `python3` fell back to a 3.9 once and broke the suite.
+- `.venv/bin/python` is a SYMLINK to a uv-managed interpreter. On 2026-09-24 16:30 that
+  interpreter moved from `/home/hh9077/.local/share/uv/python/` to
+  `/scratch/gpfs/ARORA/hh9077/uv/python/cpython-3.12.14-linux-x86_64-gnu/`, and every job
+  failed in one second with `execve(): .venv/bin/python: No such file or directory`. The link
+  and `home =` in `.venv/pyvenv.cfg` now point at the scratch path (old cfg kept as
+  `pyvenv.cfg.bak-20260924`). Before a long queue of jobs, run
+  `.venv/bin/python -c 'import torch'` on the login node.
 
 ## The login node
 

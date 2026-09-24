@@ -76,3 +76,8 @@ One entry per day. Later entries correct earlier ones in the open. Details are i
   09:20: Helen's decision after the day's results: the window-1024 matched-budget arm C chain
   switches to Muon 2.4e-4 in bf16 (Ck1024_match_muon24, jobs 14382085, 14382086); the
   window-8192 pair and both controls stay. A 2-GPU 6-step validation (14382087) gates it.
+  17:50: the 2-GPU validation of the Muon matched-budget configuration failed in 1 s:
+  `.venv/bin/python` pointed at a uv interpreter that had been moved from /home to /scratch at
+  16:30 (not by this agent). Venv repointed, torch imports, optimizer tests pass on Della;
+  validation resubmitted (14389174). Had a PLI chain started in between it would have failed
+  the same way and burnt its spare link.
