@@ -79,6 +79,21 @@ def result_is_complete(out: Path) -> bool:
     return "eval" in json.loads(out.read_text())
 
 
+def resolve_slow_spec(arm_slow: tuple[str, ...], *, token_rates: bool) -> tuple[str, ...]:
+    """The arm's slow set, plus the per-token rates when they are on.
+
+    The rates are meta-learned or they are nothing, so an arm with no slow set (A, B)
+    refuses them rather than carrying an untrained module. Arm D's wildcard already
+    covers every non-fast parameter.
+    """
+    if not token_rates:
+        return arm_slow
+    assert arm_slow, "--token-rates needs a slow set to learn the rates; use an arm with slow weights (C or D)"
+    if arm_slow == ("**",):
+        return arm_slow
+    return arm_slow + ("token_rate",)
+
+
 def resolve_inner_lr(optimizer: str, inner_lr: float | None) -> float:
     """The inner step size, or a hard error if an active inner optimizer was given none.
 
@@ -114,7 +129,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     model = build_llama_ttt(args.repo, max_seq_len=args.seq_len, window_size=args.window,
                             chunk_size=args.chunk, fast_blocks=args.fast_blocks,
                             lora=lora if lora.rank > 0 else None,
-                            dtype=torch.float32, cache_dir=args.hf_cache)
+                            dtype=torch.float32, cache_dir=args.hf_cache, token_rates=args.token_rates)
     # Master weights stay fp32; the forward runs under bf16 autocast (see
     # TTTInnerLoop._autocast). remat_blocks trades compute for the math-SDPA score
     # matrices, which dominate activation memory in the second-order path.
@@ -138,7 +153,8 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
                         micro_batch=1, remat_group=args.remat_group,
                         prefix_segment=args.prefix_segment,
                         truncate_bptt=args.truncate_bptt,
-                        slow_spec=arm["slow"] or ("__none__",), dtype=args.dtype)
+                        slow_spec=resolve_slow_spec(arm["slow"], token_rates=args.token_rates) or ("__none__",),
+                        dtype=args.dtype)
     cfg = Config(model=model.cfg, inner=inner, outer=outer, train=train)
     split = split_parameters(model, model.cfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
@@ -222,6 +238,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "201M-parameter fast set); the measured 32K optimum is 4e-6. The old default, "
                         "1e-3, is 14x the unit and drives the loss to 20.2.")
     p.add_argument("--norm-scope", default="tensor", choices=["tensor", "global"])
+    p.add_argument("--token-rates", action="store_true",
+                   help="per-token learning rates on the fast-weight write, eta_t = softplus(w.x_t + b), one "
+                        "linear layer per fast block, meta-learned as a slow parameter (LaCT Eq. 4). "
+                        "Init eta = 1, so a fresh run equals one without the flag. Needs a slow set (arm C or D)")
     p.add_argument("--weight-norm", default="none", choices=["none", "row_reset"],
                    help="after every inner step: row_reset rescales each row of a fast matrix to the row "
                         "norm it had before the step (LaCT Alg. 1 and 3); none uses the update as is")

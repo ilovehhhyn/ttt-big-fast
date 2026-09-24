@@ -10,7 +10,7 @@ import pytest
 import torch
 
 from ttt.config import LoRAConfig
-from ttt.utils.hf_import import MIRROR_REPO, hf_key_map, model_config_from_hf
+from ttt.utils.hf_import import MIRROR_REPO, hf_key_map, load_into_model, model_config_from_hf
 
 LLAMA32_1B_CONFIG = {
     "model_type": "llama", "hidden_act": "silu", "attention_bias": False, "mlp_bias": False,
@@ -54,6 +54,28 @@ def test_key_map_covers_every_model_parameter():
     own = {n for n, _ in model.named_parameters()
            if "lora_" not in n and not n.startswith("inner_lr_log.")}
     assert own == targets, f"unmapped: {sorted(own - targets)} | extra: {sorted(targets - own)}"
+
+
+def test_token_rate_parameters_have_no_hf_counterpart_and_keep_their_init():
+    """A model built with token rates loads every Llama tensor and leaves the rates at
+    their init (weight 0, softplus(bias) = 1); the loader must not count them as missing."""
+    from ttt.model.transformer import TTTTransformer
+    cfg = model_config_from_hf(LLAMA32_1B_CONFIG, window_size=8192, chunk_size=1024, fast_blocks=4,
+                               token_rates=True)
+    cfg_small = type(cfg)(**{**cfg.__dict__, "num_layers": 2, "vocab_size": 64,
+                             "hidden_size": 32, "intermediate_size": 64,
+                             "num_heads": 4, "num_kv_heads": 2, "window_size": 8, "chunk_size": 4,
+                             "fast_blocks": 1})
+    model = TTTTransformer(cfg_small, max_seq_len=16)
+    fake_state = {hf: torch.randn_like(dict(model.named_parameters())[ours])
+                  for hf, ours in hf_key_map(cfg_small.num_layers, tied=True).items()}
+
+    load_into_model(model, fake_state)
+
+    assert cfg.token_rates is True
+    rate = model.blocks[1].token_rate
+    assert rate.linear.weight.abs().max().item() == 0.0 and rate.linear.bias.item() == 0.0
+    torch.testing.assert_close(rate(torch.randn(1, 4, 32)), torch.ones(1, 4, 1), rtol=0.0, atol=1e-6)
 
 
 @pytest.mark.hf

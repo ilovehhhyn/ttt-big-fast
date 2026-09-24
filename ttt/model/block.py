@@ -8,6 +8,7 @@ from torch import Tensor
 from ttt.config import ModelConfig
 from ttt.model.attention import KVCache, SlidingWindowAttention
 from ttt.model.mlp import SwiGLUMLP
+from ttt.model.token_rate import TokenRate, scale_gradient
 
 __all__ = ["TransformerBlock"]
 
@@ -33,6 +34,11 @@ class TransformerBlock(nn.Module):
     The prime MLP exists only in suffix (TTT) blocks, so it is created only when
     `is_fast_block` is set.
 
+    With cfg.token_rates (LaCT Eq. 4) a fast block also owns a `token_rate` that predicts a
+    weight per token from the fast module's normalised input; the weight scales that
+    token's contribution to the inner gradient of the fast module and leaves the value
+    unchanged (`scale_gradient`).
+
     `use_math_backend` is forwarded to the attention module; blocks at or above
     `cfg.first_fast_layer` must set it so the TTT outer loop can backprop through
     the inner-loop gradient (double backward).
@@ -55,6 +61,9 @@ class TransformerBlock(nn.Module):
             self.mlp_prime = SwiGLUMLP(cfg.hidden_size, cfg.intermediate_size, cfg.lora)
             if cfg.post_norm:
                 self.ffn_prime_post_norm = nn.RMSNorm(cfg.hidden_size, eps=cfg.rms_norm_eps)
+        self.has_token_rate = bool(cfg.token_rates and is_fast_block)
+        if self.has_token_rate:
+            self.token_rate = TokenRate(hidden_size=cfg.hidden_size)
 
     def forward(
         self,
@@ -71,12 +80,22 @@ class TransformerBlock(nn.Module):
         h = x + attn_out
 
         if self.has_prime:
-            prime_out = self.mlp_prime(self.ffn_prime_norm(h))
+            prime_in = self.ffn_prime_norm(h)
+            prime_out = self._rate_write(self.mlp_prime(prime_in), prime_in)
             if self.post_norm:
                 prime_out = self.ffn_prime_post_norm(prime_out)
             h = h + prime_out
 
-        ffn_out = self.mlp(self.ffn_norm(h))
+        ffn_in = self.ffn_norm(h)
+        ffn_out = self.mlp(ffn_in)
+        if not self.has_prime:
+            ffn_out = self._rate_write(ffn_out, ffn_in)
         if self.post_norm:
             ffn_out = self.ffn_post_norm(ffn_out)
         return h + ffn_out, new_cache
+
+    def _rate_write(self, fast_out: Tensor, fast_in: Tensor) -> Tensor:
+        """Weight each token's write into the fast module by its predicted rate."""
+        if not self.has_token_rate:
+            return fast_out
+        return scale_gradient(fast_out, self.token_rate(fast_in))

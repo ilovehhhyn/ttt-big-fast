@@ -83,6 +83,9 @@ class ModelConfig:
     qk_norm: bool = False  # RMSNorm on q and k per head before RoPE
     post_norm: bool = False  # extra RMSNorm on each sublayer output (pre+post norm)
     prime: bool = False  # see `fast_module`
+    # Per-token learning rates on the fast-weight write (ttt/model/token_rate.py); a slow
+    # parameter, so the run's slow_spec must include "token_rate" (ttt.run enforces it).
+    token_rates: bool = False
     rope: RopeConfig = field(default_factory=RopeConfig)
     lora: LoRAConfig = field(default_factory=LoRAConfig)
 

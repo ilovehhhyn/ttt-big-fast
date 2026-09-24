@@ -21,15 +21,18 @@ from ttt.optim.inner import build_inner_optimizer
 from ttt.train.inner_loop import TTTInnerLoop, resolve_remat_group
 
 
-def build(inner: InnerConfig, *, seq_len: int = 16, chunk: int = 4, fast_blocks: int = 1, rank: int = 2):
+def build(inner: InnerConfig, *, seq_len: int = 16, chunk: int = 4, fast_blocks: int = 1, rank: int = 2,
+          token_rates: bool = False):
     mcfg = ModelConfig(
         vocab_size=32, hidden_size=16, intermediate_size=32, num_layers=3,
         num_heads=4, num_kv_heads=2, window_size=8, chunk_size=chunk,
         fast_blocks=fast_blocks, rope=RopeConfig(theta=10000.0, scaling="none"),
-        lora=LoRAConfig(rank=rank, alpha=4.0),
+        lora=LoRAConfig(rank=rank, alpha=4.0), token_rates=token_rates,
     )
+    slow = TrainConfig().slow_spec + (("token_rate",) if token_rates else ())
     cfg = Config(model=mcfg, inner=inner,
-                 train=TrainConfig(seq_len=seq_len, tokens_per_step=seq_len, micro_batch=1, dtype="fp32"))
+                 train=TrainConfig(seq_len=seq_len, tokens_per_step=seq_len, micro_batch=1, dtype="fp32",
+                                   slow_spec=slow))
     torch.manual_seed(0)
     model = TTTTransformer(mcfg, max_seq_len=seq_len).double()
     split = split_parameters(model, mcfg, cfg.train)
@@ -321,3 +324,37 @@ def test_per_window_backward_matches_single_backward_across_optimizers(optimizer
     for p, g in zip(slow, g_ref, strict=True):
         have = torch.zeros_like(p) if p.grad is None else p.grad
         assert torch.allclose(have, g, atol=1e-9), (have - g).abs().max().item()
+
+
+# --------------------------------------------------------------------------- per-token rates
+
+
+def test_token_rates_at_init_leave_the_sequence_loss_unchanged():
+    """eta = 1 at init, so every chunk loss and every inner step is identical."""
+    inner = InnerConfig(optimizer="normalized_sgd", lr_rms=1e-2, learned_lr=True)
+    cfg_plain, model_plain, split_plain = build(inner)
+    cfg_rated, model_rated, split_rated = build(inner, token_rates=True)
+    model_rated.load_state_dict(model_plain.state_dict(), strict=False)
+
+    out_plain, _ = meta_grad(cfg_plain, model_plain, split_plain, remat_group=1)
+    out_rated, _ = meta_grad(cfg_rated, model_rated, split_rated, remat_group=1)
+
+    torch.testing.assert_close(out_rated.per_chunk_loss, out_plain.per_chunk_loss, rtol=0.0, atol=0.0)
+    assert sorted(k for k in split_rated.slow if "token_rate" in k) == [
+        "blocks.2.token_rate.linear.bias", "blocks.2.token_rate.linear.weight"]
+    assert not any("token_rate" in k for k in split_plain.slow)
+
+
+def test_token_rate_parameters_receive_a_meta_gradient_through_the_inner_loop():
+    """The rates enter only through the inner gradient, so a nonzero meta-gradient on
+    them proves the second-order path through scale_gradient is intact."""
+    inner = InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=True)
+    cfg, model, split = build(inner, token_rates=True)
+
+    _, grads = meta_grad(cfg, model, split, remat_group=1)
+
+    names = sorted(split.slow)
+    g_weight = grads[names.index("blocks.2.token_rate.linear.weight")]
+    g_bias = grads[names.index("blocks.2.token_rate.linear.bias")]
+    assert torch.isfinite(g_weight).all() and g_weight.abs().max().item() > 0.0, g_weight
+    assert torch.isfinite(g_bias).all() and g_bias.abs().max().item() > 0.0, g_bias

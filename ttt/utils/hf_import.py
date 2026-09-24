@@ -37,7 +37,8 @@ MIRROR_REPO = "unsloth/Llama-3.2-1B"
 
 
 def model_config_from_hf(hf_config: dict, *, window_size: int, chunk_size: int,
-                         fast_blocks: int, lora: LoRAConfig | None = None) -> ModelConfig:
+                         fast_blocks: int, lora: LoRAConfig | None = None,
+                         token_rates: bool = False) -> ModelConfig:
     """Build our ModelConfig from an HF config.json, asserting the fields we rely on."""
     assert hf_config["model_type"] == "llama", f"expected llama, got {hf_config['model_type']}"
     assert hf_config["hidden_act"] == "silu", "SwiGLUMLP assumes silu"
@@ -66,7 +67,7 @@ def model_config_from_hf(hf_config: dict, *, window_size: int, chunk_size: int,
         rms_norm_eps=float(hf_config["rms_norm_eps"]),
         tie_word_embeddings=bool(hf_config["tie_word_embeddings"]),
         window_size=window_size, chunk_size=chunk_size, fast_blocks=fast_blocks,
-        rope=rope, lora=lora or LoRAConfig(rank=0),
+        rope=rope, lora=lora or LoRAConfig(rank=0), token_rates=token_rates,
     )
 
 
@@ -129,11 +130,11 @@ def load_into_model(model: TTTTransformer, hf_state: dict, *, strict: bool = Tru
 def build_llama_ttt(repo_id: str = MIRROR_REPO, *, max_seq_len: int, window_size: int = 8192,
                     chunk_size: int = 1024, fast_blocks: int = 4,
                     lora: LoRAConfig | None = None, dtype: torch.dtype = torch.float32,
-                    cache_dir: str | None = None) -> TTTTransformer:
+                    cache_dir: str | None = None, token_rates: bool = False) -> TTTTransformer:
     """Fully-loaded TTTTransformer with pretrained Llama-3.2 weights."""
     hf_state, hf_cfg = load_hf_state_dict(repo_id, cache_dir=cache_dir)
     cfg = model_config_from_hf(hf_cfg, window_size=window_size, chunk_size=chunk_size,
-                               fast_blocks=fast_blocks, lora=lora)
+                               fast_blocks=fast_blocks, lora=lora, token_rates=token_rates)
     model = TTTTransformer(cfg, max_seq_len=max_seq_len).to(dtype)
     load_into_model(model, hf_state)
     return model
