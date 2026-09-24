@@ -152,6 +152,11 @@ class InnerConfig:
     ilr_init: float = 0.1
     clip_tau: float = 1.0  # clipped_sgd only: global-norm clip threshold (e2e uses 1.0)
     ns_dtype: Literal["float32", "bfloat16"] = "float32"  # muon only: dtype of the Newton-Schulz rounds
+    # Applied by every inner rule after its update (LaCT, arXiv 2505.23884, Alg. 1 and 3).
+    # row_reset: each row of a 2-D fast weight (one output unit's input vector) is rescaled to
+    # the row norm it had before the step, so the update turns the row without changing its
+    # length; 1-D tensors are left alone. none: the update is used as is.
+    weight_norm: Literal["none", "row_reset"] = "none"
     # preconditioned_sgd only. A chunk gradient is G = sum_t d_t k_t^T (d_t: error at the matrix
     # output, k_t: its input, the "key"). Most of ||G||^2 lies in a few key directions shared by
     # all tokens; that part moves the output for every later token and caps the step size, while
@@ -170,6 +175,9 @@ class InnerConfig:
         assert self.ns_dtype == "float32" or self.optimizer == "muon", (
             f"ns_dtype={self.ns_dtype!r} with optimizer={self.optimizer!r}: only muon runs a Newton-Schulz "
             "iteration; pass --inner muon or drop --ns-dtype"
+        )
+        assert self.weight_norm in ("none", "row_reset"), (
+            f"weight_norm={self.weight_norm!r}; must be 'none' or 'row_reset'"
         )
         assert self.lr_rms >= 0.0
         assert 0.0 <= self.delta_decay < 1.0

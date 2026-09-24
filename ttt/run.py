@@ -128,7 +128,7 @@ def build_everything(args) -> tuple[Config, torch.nn.Module, object, TTTInnerLoo
     )
     inner = InnerConfig(optimizer=optimizer,
                         lr_rms=resolve_inner_lr(optimizer, args.inner_lr), norm_scope=args.norm_scope,
-                        ns_dtype=args.ns_dtype,
+                        ns_dtype=args.ns_dtype, weight_norm=args.weight_norm,
                         eps=args.adam_eps, clip_tau=args.clip_tau, beta1=0.9, beta2=0.9, warm_start=True,
                         learned_lr=bool(arm["slow"]) and "inner_lr_log" in arm["slow"],
                         delta_decay=args.delta_decay, key_basis_path=args.key_basis,
@@ -163,7 +163,7 @@ def _build_arm_e(args, arm, device):
 
     inner = InnerConfig(optimizer=args.inner or arm["inner"],
                         lr_rms=resolve_inner_lr(args.inner or arm["inner"], args.inner_lr),
-                        ns_dtype=args.ns_dtype,
+                        ns_dtype=args.ns_dtype, weight_norm=args.weight_norm,
                         clip_tau=args.clip_tau, learned_lr=False)
     train = TrainConfig(seq_len=args.seq_len, tokens_per_step=args.tokens_per_step,
                         micro_batch=1, remat_group=args.remat_group,
@@ -222,6 +222,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "201M-parameter fast set); the measured 32K optimum is 4e-6. The old default, "
                         "1e-3, is 14x the unit and drives the loss to 20.2.")
     p.add_argument("--norm-scope", default="tensor", choices=["tensor", "global"])
+    p.add_argument("--weight-norm", default="none", choices=["none", "row_reset"],
+                   help="after every inner step: row_reset rescales each row of a fast matrix to the row "
+                        "norm it had before the step (LaCT Alg. 1 and 3); none uses the update as is")
     p.add_argument("--ns-dtype", default="float32", choices=["float32", "bfloat16"],
                    help="muon only: dtype of the five Newton-Schulz rounds (the fast weights, the gradient "
                         "and the update stay fp32). bfloat16 is the reference Muon's choice; measured 1.9%% "

@@ -113,8 +113,11 @@ class InnerOptimizer(ABC):
         lr_scale: Tensor | float = 1.0,
         lr_mult: dict[str, Tensor] | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any]]:
-        """One inner step: the rule's update. Pure: inputs are not mutated."""
-        return self._update(fast, grads, state, lr_scale=lr_scale, lr_mult=lr_mult)
+        """One inner step: the rule's update, then cfg.weight_norm. Pure: inputs are not mutated."""
+        new_fast, new_state = self._update(fast, grads, state, lr_scale=lr_scale, lr_mult=lr_mult)
+        if self.cfg.weight_norm == "row_reset":
+            new_fast = {k: _reset_row_norms(fast[k], new_fast[k], self.cfg.eps_norm) for k in new_fast}
+        return new_fast, new_state
 
 
 class NoOpInnerOptimizer(InnerOptimizer):
@@ -184,6 +187,21 @@ class NormalizedSGD(InnerOptimizer):
                 n = scale_n
             new_fast[k] = w - _lr(cfg, k, lr_scale, lr_mult) * n * _normalized_direction(g, norm, cfg.eps_norm)
         return new_fast, {}
+
+
+def _reset_row_norms(before: Tensor, after: Tensor, eps_norm: float) -> Tensor:
+    """after * ||before||_row / max(||after||_row, eps_norm) for a 2-D tensor; 1-D unchanged.
+
+    Rows run along dim 1, the input dimension of a [out, in] weight, as in LaCT Alg. 1
+    (`w.norm(dim=1)`). The floor only guards a row that the update drove to exactly zero,
+    which a normalized step of RMS lr cannot do to a pretrained row; it never rescales
+    a healthy row, so the reset is exact there.
+    """
+    if after.ndim != 2:
+        return after
+    norm_before = before.norm(dim=1, keepdim=True)
+    norm_after = after.norm(dim=1, keepdim=True).clamp_min(eps_norm)
+    return after * (norm_before / norm_after)
 
 
 def _normalized_direction(g: Tensor, norm: Tensor, eps_norm: float) -> Tensor:

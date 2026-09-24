@@ -350,6 +350,58 @@ def test_muon_rms_is_lr() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Post-update weight normalization (LaCT Alg. 1 and 3)
+# --------------------------------------------------------------------------- #
+
+
+def _row_norms(w: torch.Tensor) -> torch.Tensor:
+    return w.norm(dim=1)
+
+
+@pytest.mark.parametrize("name", ["normalized_sgd", "adamw", "muon"])
+def test_row_reset_keeps_every_row_norm_of_a_matrix_exactly(name: str) -> None:
+    """Invariant: after the step each row of a 2-D fast weight has the row norm it had
+    before the step, while the row direction has moved. 1-D tensors are not rescaled."""
+    cfg = InnerConfig(optimizer=name, lr_rms=1e-1, warm_start=True, weight_norm="row_reset")
+    opt = build_inner_optimizer(cfg)
+    fast, grads = _tensors(0), _tensors(1)
+    before = {k: v.clone() for k, v in fast.items()}
+
+    new_fast, _ = opt.step(fast, grads, opt.init_state(fast, grads))
+
+    assert torch.allclose(_row_norms(new_fast["a"]), _row_norms(before["a"]), rtol=0.0, atol=1e-12)
+    assert (new_fast["a"] - before["a"]).abs().max().item() > 1e-3, "the direction did not move"
+    plain, _ = build_inner_optimizer(InnerConfig(optimizer=name, lr_rms=1e-1, warm_start=True)).step(
+        fast, grads, opt.init_state(fast, grads))
+    assert torch.equal(new_fast["b"], plain["b"]), "1-D tensors must not be rescaled"
+    # Control: without the reset the row norms do change, so the assertion above has teeth.
+    assert not torch.allclose(_row_norms(plain["a"]), _row_norms(before["a"]), rtol=0.0, atol=1e-6)
+
+
+def test_row_reset_rescales_toward_the_pre_step_norm_not_the_unit_norm() -> None:
+    """Witness: a matrix whose rows have norms 2 and 5 keeps 2 and 5, not 1 and 1."""
+    cfg = InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, weight_norm="row_reset")
+    opt = build_inner_optimizer(cfg)
+    w = torch.tensor([[2.0, 0.0, 0.0], [0.0, 3.0, 4.0]], dtype=DT)
+    g = torch.tensor([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]], dtype=DT)
+
+    new_fast, _ = opt.step({"w": w}, {"w": g}, {})
+
+    assert torch.allclose(_row_norms(new_fast["w"]), torch.tensor([2.0, 5.0], dtype=DT), rtol=0.0, atol=1e-12)
+
+
+def test_row_reset_second_order_flows() -> None:
+    cfg = InnerConfig(optimizer="muon", lr_rms=1e-2, weight_norm="row_reset")
+    dg, dx = _second_order_probe(cfg, (6, 8))
+    assert torch.isfinite(dx).all() and dx.abs().max().item() > 0.0
+
+
+def test_inner_config_rejects_an_unknown_weight_norm() -> None:
+    with pytest.raises(AssertionError, match="weight_norm"):
+        InnerConfig(optimizer="muon", lr_rms=1e-2, weight_norm="unit")  # type: ignore[arg-type]  # the rejected case
+
+
+# --------------------------------------------------------------------------- #
 # 9-10. Learned per-tensor LR and key hygiene
 # --------------------------------------------------------------------------- #
 
