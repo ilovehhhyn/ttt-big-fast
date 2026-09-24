@@ -1670,3 +1670,21 @@ validation (job 14330856): step-0 loss 5.022287 against 5.022278, step-5 loss 3.
 peak 52.0 against 60.4 GiB. All three predictions held. The 40-step chain through Muon at 2.4e-4
 in bf16 is submitted as two 1-hour links (jobs 14359068, 14359069); predictions in
 `.agent/plan.md`.
+
+### Sixty steps of 32 sequences at window 8192: three times the tokens of the 150-step run, the same loss
+
+`C_32k_bs32_s60` (job 14169729; 60 x 32 sequences, 62.9M tokens, one A100, 1078 s per step,
+18.2 h, peak 68.0 GiB; normalized SGD 4e-6, `truncate_bptt=2`).
+
+| run | steps x sequences | tokens | loss, TTT on | TTT off | TTT on - off per book | 95% CI | books |
+|---|---|---|---|---|---|---|---|
+| `C32k_bs32` | 20 x 32 | 21.0M | 2.5664 | 2.5777 | +0.0091 | [+0.0047, +0.0134] | 22/22 |
+| `C32k_s150` | 150 x 4 | 19.7M | 2.4664 | 2.4756 | +0.0067 | [+0.0025, +0.0110] | 21/22 |
+| `C32k_bs32_s60` | 60 x 32 | 62.9M | 2.4687 | 2.4768 | +0.0063 | [+0.0030, +0.0095] | 21/22 |
+
+Paired per book, `bs32_s60` against `s150` with TTT on: -0.0066 [-0.0154, +0.0023], 1 of 22
+books in favour of the larger batch (one book carries the wide interval); against `bs32`,
++0.0888 [+0.0715, +0.1061], 22/22. Three times the tokens in batches of 32 buy the same loss as
+150 steps of 4: at this stage the number of outer steps matters, not the number of tokens, and
+what TTT adds on the same weights stays at +0.006 to +0.007, under the +0.0208 ceiling. It has
+no plain control of its own.
