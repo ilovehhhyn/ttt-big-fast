@@ -15,19 +15,20 @@ from ttt.train.inner_loop import TTTInnerLoop
 from ttt.train.trainer import Trainer
 
 
-def build(seqs_per_step=2, lr_rms=1e-2, learned_lr=True):
+def build(seqs_per_step=2, lr_rms=1e-2, learned_lr=True, fast_init_trained=False):
     mcfg = ModelConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_layers=3,
                        num_heads=4, num_kv_heads=2, window_size=8, chunk_size=4, fast_blocks=1,
                        rope=RopeConfig(theta=10000.0, scaling="none"), lora=LoRAConfig(rank=2, alpha=4.0))
     cfg = Config(model=mcfg,
                  inner=InnerConfig(optimizer="normalized_sgd", lr_rms=lr_rms, learned_lr=learned_lr),
                  outer=OuterConfig(lr=1e-2, total_steps=10),
-                 train=TrainConfig(seq_len=16, tokens_per_step=16 * seqs_per_step, dtype="fp32"))
+                 train=TrainConfig(seq_len=16, tokens_per_step=16 * seqs_per_step, dtype="fp32",
+                                   fast_init_trained=fast_init_trained))
     torch.manual_seed(0)
     model = TTTTransformer(mcfg, max_seq_len=16).double()
     split = split_parameters(model, mcfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
-    opt = build_outer_optimizer(split.slow, cfg.outer)
+    opt = build_outer_optimizer(split.outer, cfg.outer)
     return cfg, model, split, loop, opt
 
 
@@ -141,3 +142,26 @@ def test_arm_d_full_slow_step_trains_the_base_weights():
     assert any(".attn.wq." in k for k in moved), "attention weights did not train"
     assert any(k.startswith("blocks.0.mlp.") for k in moved), "a NON-fast block's MLP did not train"
     assert not (moved & set(split.fast)), f"W0 must not move in this arm: {sorted(moved & set(split.fast))}"
+
+
+def test_fast_init_trained_moves_w0_and_the_inner_loop_still_starts_from_it():
+    """Arm F: the outer loop owns the fast weights' initial value W_0. One outer step moves
+    every fast tensor; the frozen set stays put; and the next sequence still starts its
+    inner loop from the new W_0 (the live parameter), not from a stale copy."""
+    cfg, model, split, loop, opt = build(fast_init_trained=True)
+    before_fast = {k: v.detach().clone() for k, v in split.fast.items()}
+    before_frozen = {k: v.detach().clone() for k, v in split.frozen.items()}
+    assert set(split.outer) == set(split.slow) | set(split.fast)
+    tr = Trainer(cfg, model, split, loop, opt, batches(cfg), device=torch.device("cpu"))
+
+    tr.train_step(1)
+
+    for k, v in split.fast.items():
+        assert not torch.equal(v, before_fast[k]), f"W_0 did not move: {k}"
+    for k, v in split.frozen.items():
+        assert torch.equal(v, before_frozen[k]), f"frozen parameter changed: {k}"
+    ids, tgt, mask = next(iter(batches(cfg, n=1, seed=5))).values()
+    out = loop.run_sequence(ids, tgt, mask, dict(split.fast), inference=True)
+    assert torch.isfinite(out.loss)
+    for k, v in split.fast.items():
+        assert not torch.equal(v, before_fast[k]), "run_sequence must read the live W_0"

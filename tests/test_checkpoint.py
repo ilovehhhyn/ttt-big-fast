@@ -25,7 +25,7 @@ CPU = torch.device("cpu")
 FP = {"seq_len": 16, "steps": 10, "outer_lr": 1e-2, "seed": 0}
 
 
-def build(seqs_per_step=2):
+def build(seqs_per_step=2, fast_init_trained=False):
     """Tiny float64 CPU model; mirrors tests/test_trainer.py::build. learned_lr is ON so
     the inner-LR scalars (slow parameters in their own param group) are covered too."""
     mcfg = ModelConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_layers=3,
@@ -34,12 +34,13 @@ def build(seqs_per_step=2):
     cfg = Config(model=mcfg,
                  inner=InnerConfig(optimizer="normalized_sgd", lr_rms=1e-2, learned_lr=True),
                  outer=OuterConfig(lr=1e-2, total_steps=10),
-                 train=TrainConfig(seq_len=16, tokens_per_step=16 * seqs_per_step, dtype="fp32"))
+                 train=TrainConfig(seq_len=16, tokens_per_step=16 * seqs_per_step, dtype="fp32",
+                                   fast_init_trained=fast_init_trained))
     torch.manual_seed(0)
     model = TTTTransformer(mcfg, max_seq_len=16).double()
     split = split_parameters(model, mcfg, cfg.train)
     loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
-    opt = build_outer_optimizer(split.slow, cfg.outer)
+    opt = build_outer_optimizer(split.outer, cfg.outer)
     return cfg, model, split, loop, opt
 
 
@@ -234,3 +235,26 @@ def test_load_slow_weights_refuses_a_different_parameter_set(tmp_path):
     torch.save(blob, ckpt)
     with pytest.raises(AssertionError, match="slow parameter names"):
         load_slow_weights(ckpt, split=split)
+
+
+def test_trained_fast_init_is_saved_and_restored_and_refused_by_a_plain_split(tmp_path):
+    """A checkpoint of a run that trains W_0 carries W_0. Loading it restores the fast
+    weights exactly; a split that does not train W_0 has a different parameter set and
+    must refuse it rather than load half of it."""
+    from ttt.train.checkpoint import load_slow_weights
+
+    cfg, model, split, loop, opt = build(fast_init_trained=True)
+    Trainer(cfg, model, split, loop, opt, batches(cfg), device=CPU).train_step(1)
+    ckpt = tmp_path / "f.ckpt"
+    save_checkpoint(ckpt, step=1, split=split, optimizer=opt, history=[], fingerprint=training_fingerprint(FP))
+    trained_fast = {k: v.detach().clone() for k, v in split.fast.items()}
+
+    _, fresh_model, fresh_split, _, _ = build(fast_init_trained=True)
+    assert any(not torch.equal(fresh_split.fast[k], trained_fast[k]) for k in trained_fast)
+    load_slow_weights(ckpt, split=fresh_split)
+    for k, v in trained_fast.items():
+        assert torch.equal(fresh_split.fast[k], v), k
+
+    _, _, plain_split, _, _ = build(fast_init_trained=False)
+    with pytest.raises(AssertionError, match="parameter names differ"):
+        load_slow_weights(ckpt, split=plain_split)

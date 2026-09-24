@@ -12,8 +12,10 @@ batch size).
     clip_grad_norm_(slow, 1.0)
     AdamW.step()
 
-Only the slow parameters are optimized. The fast weights are reset to W_0 at
-every sequence, and W_0 itself is never written by the inner loop.
+The outer optimizer owns `split.outer`: the slow parameters, plus the fast weights
+themselves when `TrainConfig.fast_init_trained` is set (arm F meta-learns W_0). The
+fast weights are reset to W_0 at every sequence, and W_0 is never written by the
+inner loop.
 """
 
 from __future__ import annotations
@@ -60,7 +62,7 @@ class Trainer:
         self.train_iter = train_iter
         self.device = device
         self.empty_cache = empty_cache and device.type == "cuda"
-        self.slow_params: list[Tensor] = [v for _, v in sorted(split.slow.items())]
+        self.slow_params: list[Tensor] = [v for _, v in sorted(split.outer.items())]
         self.seqs_per_step = cfg.train.seqs_per_step  # GLOBAL: summed over all ranks
         assert self.seqs_per_step >= 1
         # Data parallelism over sequences (see ttt/train/distributed.py). `train_iter` must be

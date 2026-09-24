@@ -280,6 +280,10 @@ class TrainConfig:
     # the same, unrolling only the last 1-2 of its 4 inner steps.
     truncate_bptt: int = 0
     slow_spec: tuple[str, ...] = ("lora_A", "lora_B", "norm.weight", "inner_lr_log")
+    # Arm F: the fast weights' initial value W_0 is itself meta-learned. The outer optimizer
+    # then owns the fast tensors as well (ParamSplit.outer); the inner loop still resets to
+    # them at every sequence. False for arms A to D, whose W_0 is the pretrained MLP.
+    fast_init_trained: bool = False
     seed: int = 0
     dtype: Literal["bf16", "fp32"] = "bf16"
 

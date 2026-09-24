@@ -59,7 +59,7 @@ def save_checkpoint(
     blob = {
         "format": _FORMAT,
         "step": step,
-        "slow": {k: v.detach().cpu() for k, v in split.slow.items()},
+        "slow": {k: v.detach().cpu() for k, v in split.outer.items()},  # everything the outer loop trains
         "optimizer": optimizer.state_dict(),
         "history": list(history),
         "fingerprint": dict(fingerprint),
@@ -127,20 +127,22 @@ def load_checkpoint(
 
 def _assert_same_slow_set(saved: dict, split: ParamSplit) -> None:
     """Same parameter names, same shapes: weights are only meaningful in the architecture
-    and slow set they were trained in."""
-    assert set(saved) == set(split.slow), (
-        "slow parameter names differ between checkpoint and model: "
-        f"only in checkpoint {sorted(set(saved) - set(split.slow))[:5]}, "
-        f"only in model {sorted(set(split.slow) - set(saved))[:5]}"
+    and trained set they were trained in (the slow set, plus W_0 when it is trained)."""
+    outer = split.outer
+    assert set(saved) == set(outer), (
+        "slow parameter names differ between checkpoint and model (the trained set): "
+        f"only in checkpoint {sorted(set(saved) - set(outer))[:5]}, "
+        f"only in model {sorted(set(outer) - set(saved))[:5]}"
     )
     for k, v in saved.items():
-        assert v.shape == split.slow[k].shape, f"{k}: checkpoint {tuple(v.shape)} vs model {tuple(split.slow[k].shape)}"
+        assert v.shape == outer[k].shape, f"{k}: checkpoint {tuple(v.shape)} vs model {tuple(outer[k].shape)}"
 
 
 def _copy_slow(saved: dict, split: ParamSplit) -> None:
+    outer = split.outer
     with torch.no_grad():
         for k, v in saved.items():
-            split.slow[k].copy_(v)  # copy_ casts to the parameter's device and dtype
+            outer[k].copy_(v)  # copy_ casts to the parameter's device and dtype
 
 
 def load_slow_weights(path: Path, *, split: ParamSplit) -> dict:

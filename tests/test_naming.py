@@ -273,3 +273,17 @@ def test_full_slow_wildcard_cannot_be_mixed_with_patterns() -> None:
     """("**", "lora_A") is a contradiction in terms; refuse it where it is written."""
     with pytest.raises(AssertionError, match="must be the only entry"):
         TrainConfig(seq_len=16, tokens_per_step=32, slow_spec=("**", "lora_A"))
+
+
+def test_outer_set_is_the_slow_set_unless_the_fast_init_is_trained():
+    """ParamSplit.outer is what the outer optimizer owns: the slow set, plus the fast
+    weights (their initial value W_0) only when TrainConfig.fast_init_trained is set."""
+    fast = {"blocks.1.mlp.w1.weight": nn.Parameter(torch.zeros(2, 2))}
+    slow = {"blocks.1.attn.wq.lora_A": nn.Parameter(torch.zeros(1, 2))}
+
+    plain = ParamSplit(fast=fast, slow=slow, frozen={})
+    trained = ParamSplit(fast=fast, slow=slow, frozen={}, fast_init_trained=True)
+
+    assert plain.outer == slow
+    assert trained.outer == {**slow, **fast}
+    assert plain.counts()["outer"] == 2 and trained.counts()["outer"] == 6

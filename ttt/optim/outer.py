@@ -1,7 +1,8 @@
 """Outer (meta) optimizer: AdamW, parameter groups, and the two schedules.
 
-The outer loop owns only the SLOW parameters -- LoRA factors, RMSNorm gains and
-the per-fast-tensor inner-LR log scalars (see ``ttt.model.naming``). It updates
+The outer loop owns ``ParamSplit.outer``: the SLOW parameters -- LoRA factors, RMSNorm
+gains and the per-fast-tensor inner-LR log scalars (see ``ttt.model.naming``) -- plus
+the fast weights' initial value W_0 when ``TrainConfig.fast_init_trained`` is set (arm F). It updates
 them once per ``TrainConfig.seqs_per_step`` sequences, because fast weights are
 per-sequence state and ``micro_batch`` is pinned to 1: an outer step is
 ``seqs_per_step`` sequential inner-loop calls with gradient accumulation.

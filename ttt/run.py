@@ -302,9 +302,10 @@ def main() -> None:
     main_rank = dist_info.is_main
     torch.manual_seed(args.seed)  # identical on every rank: they must build identical models
     cfg, model, split, loop, device = build_everything(args)
-    counts = {k: sum(v.numel() for v in getattr(split, k).values()) for k in ("fast", "slow", "frozen")}
+    counts = split.counts()
     if main_rank:
-        print(f"[run] arm={args.arm} fast={counts['fast']:,} slow={counts['slow']:,} frozen={counts['frozen']:,}", flush=True)
+        print(f"[run] arm={args.arm} fast={counts['fast']:,} slow={counts['slow']:,} frozen={counts['frozen']:,} "
+              f"outer={counts['outer']:,} fast_init_trained={split.fast_init_trained}", flush=True)
         print(f"[run] chunks={cfg.num_chunks} remat_group={loop.group} seqs_per_step={cfg.train.seqs_per_step} "
               f"world_size={dist_info.world_size}", flush=True)
 
@@ -319,7 +320,7 @@ def main() -> None:
         print(f"[load-slow] {args.load_slow}: step {result['loaded_slow']['step']}", flush=True)
 
     if args.mode == "train":
-        opt = build_outer_optimizer(split.slow, cfg.outer)
+        opt = build_outer_optimizer(split.outer, cfg.outer)
         # Resume. A job can die at any moment (wall limit, node failure), and on this
         # cluster a resubmission waits days, so every completed step is checkpointed and a
         # restart continues exactly where it stopped (see ttt/train/checkpoint.py).

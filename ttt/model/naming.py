@@ -123,6 +123,14 @@ class ParamSplit:
     fast: dict[str, Tensor]
     slow: dict[str, Tensor]
     frozen: dict[str, Tensor]
+    fast_init_trained: bool = False
+
+    @property
+    def outer(self) -> dict[str, Tensor]:
+        """What the outer optimizer owns: slow, plus fast (W_0) when the fast init is trained."""
+        if not self.fast_init_trained:
+            return dict(self.slow)
+        return {**self.slow, **self.fast}
 
     def assert_disjoint_and_total(self, model: nn.Module) -> None:
         """Raise unless fast/slow/frozen partition ``model``'s parameters exactly."""
@@ -159,6 +167,7 @@ class ParamSplit:
             "fast": sum(t.numel() for t in self.fast.values()),
             "slow": sum(t.numel() for t in self.slow.values()),
             "frozen": sum(t.numel() for t in self.frozen.values()),
+            "outer": sum(t.numel() for t in self.outer.values()),
         }
 
 
@@ -197,6 +206,6 @@ def split_parameters(model: nn.Module, cfg: ModelConfig, train_cfg: TrainConfig)
             param.requires_grad_(False)
             frozen[name] = param
 
-    split = ParamSplit(fast=fast, slow=slow, frozen=frozen)
+    split = ParamSplit(fast=fast, slow=slow, frozen=frozen, fast_init_trained=train_cfg.fast_init_trained)
     split.assert_disjoint_and_total(model)
     return split
