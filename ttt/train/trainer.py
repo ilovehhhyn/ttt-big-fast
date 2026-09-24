@@ -79,6 +79,19 @@ class Trainer:
             return None
         return self.model.inner_lr_multipliers()
 
+    def _slow_module_stats(self) -> dict:
+        """Per-step readings of the optional slow modules: the arm F gates (they start at 0 and
+        must leave it for the prime MLP to matter) and the per-token rate weights (0 at init)."""
+        gates = [v.detach().reshape(()) for k, v in sorted(self.split.slow.items()) if k.endswith(".prime_gate")]
+        rates = [v.detach().norm() for k, v in sorted(self.split.slow.items()) if k.endswith(".token_rate.linear.weight")]
+        stats: dict = {}
+        if gates:
+            g = torch.stack(gates)
+            stats.update({"prime_gate_mean": float(g.mean()), "prime_gate_min": float(g.min()), "prime_gate_max": float(g.max())})
+        if rates:
+            stats["token_rate_weight_norm_mean"] = float(torch.stack(rates).mean())
+        return stats
+
     def train_step(self, step: int) -> StepMetrics:
         t0 = time.perf_counter()
         lr = lr_at_step(step, self.cfg.outer)
@@ -135,5 +148,6 @@ class Trainer:
             extra = {"inner_lr_mult_mean": float(mult.mean()),
                      "inner_lr_mult_min": float(mult.min()),
                      "inner_lr_mult_max": float(mult.max())}
+        extra.update(self._slow_module_stats())
         return StepMetrics(step=step, loss=total / self.seqs_per_step, grad_norm=float(gnorm),
                            lr=lr, inner_lr_scale=scale, seconds=time.perf_counter() - t0, extra=extra)

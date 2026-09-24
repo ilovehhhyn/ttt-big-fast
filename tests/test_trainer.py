@@ -178,3 +178,25 @@ def test_untrained_fast_weights_carry_no_gradient_after_an_outer_step():
     cfg, model, split, loop, opt = build(fast_init_trained=True)
     Trainer(cfg, model, split, loop, opt, batches(cfg), device=torch.device("cpu")).train_step(1)
     assert all(v.grad is not None for v in split.fast.values())
+
+
+def test_token_rate_weight_norm_is_logged_and_moves_off_zero():
+    """The rate weights start at 0 and are meta-learned; the per-step log must show them."""
+    mcfg = ModelConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_layers=3,
+                       num_heads=4, num_kv_heads=2, window_size=8, chunk_size=4, fast_blocks=1,
+                       rope=RopeConfig(theta=10000.0, scaling="none"), lora=LoRAConfig(rank=2, alpha=4.0),
+                       token_rates=True)
+    cfg = Config(model=mcfg, inner=InnerConfig(optimizer="normalized_sgd", lr_rms=1e-1, learned_lr=True),
+                 outer=OuterConfig(lr=1e-2, total_steps=10),
+                 train=TrainConfig(seq_len=16, tokens_per_step=32, dtype="fp32",
+                                   slow_spec=TrainConfig().slow_spec + ("token_rate",)))
+    torch.manual_seed(0)
+    model = TTTTransformer(mcfg, max_seq_len=16).double()
+    split = split_parameters(model, mcfg, cfg.train)
+    loop = TTTInnerLoop(model, cfg, build_inner_optimizer(cfg.inner))
+    opt = build_outer_optimizer(split.outer, cfg.outer)
+
+    metrics = Trainer(cfg, model, split, loop, opt, batches(cfg), device=torch.device("cpu")).train_step(1)
+
+    assert metrics.extra["token_rate_weight_norm_mean"] > 0.0
+    assert "prime_gate_mean" not in metrics.extra

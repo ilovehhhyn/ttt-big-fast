@@ -155,6 +155,8 @@ def test_arm_f_gate_opens_at_the_first_outer_step_while_the_prime_weights_wait()
 
     assert metrics.loss > 0.0
     assert gate.item() != 0.0, "the gate received no gradient"
+    assert metrics.extra["prime_gate_mean"] == gate.item() and metrics.extra["prime_gate_min"] == gate.item()
+    assert "token_rate_weight_norm_mean" not in metrics.extra
     for k, v in split.fast.items():
         assert torch.equal(v, prime_before[k]), f"prime W_0 moved while the gate was 0: {k}"
     for k, v in split.frozen.items():
