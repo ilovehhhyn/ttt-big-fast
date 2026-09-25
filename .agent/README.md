@@ -14,6 +14,7 @@ the result files on Della and the project lead's memory notes. Read this file fi
 | `literature.md` | the papers the design and the fixes came from, and how far each claim was checked |
 | `operations.md` | Della, scripts, how a run is launched, and the mistakes that already cost a job |
 | `log.md` | dated log of what happened, one entry per day |
+| `cado-feedback.md` | bug reports and wishes from using Helen's `tplane` library in this project (from 2026-09-25) |
 | `HANDOFF_PROMPT.md` | the message to paste into a fresh agent's first turn: reading order, rules, state, next steps, past mistakes |
 
 ## The project in one paragraph

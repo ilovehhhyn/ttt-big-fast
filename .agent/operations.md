@@ -23,6 +23,15 @@ week. The cluster rules are hard rules; each one is an incident.
   `pyvenv.cfg.bak-20260924`). Before a long queue of jobs, run
   `.venv/bin/python -c 'import torch'` on the login node.
 
+## cado (tplane), from 2026-09-25
+
+Helen's library for typed job outcomes; new launch, wait and outcome code tries it first and
+every friction goes to `cado-feedback.md`. Installed in the Della venv from
+`/scratch/gpfs/ARORA/hh9077/cado-upstream/tplane` (tplane 0.1.0) with
+`uv pip install --python .venv/bin/python -e ...`; `tp show RUN_DIR --failures-only` reads a
+run. It does not install under the laptop's Python 3.13 (pin `<3.13`), so code that imports it
+must keep a tested path that runs without it, and say so.
+
 ## The login node
 
 - A watchdog kills GPU processes after about 15 minutes and CPU-heavy processes after about
